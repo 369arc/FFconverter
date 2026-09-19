@@ -239,19 +239,6 @@ rm ~/.local/share/icons/hicolor/256x256/apps/ffconverter.png
 
 For issues or questions, open an issue on the project GitHub page.
 
-## Support the Project
-
-If this project saved you time, consider sending a tip! 
-
-| Asset | Network | Wallet Address |
-| :--- | :--- | :--- |
-| **Bitcoin** | BTC | `bc1q6ayz2jjzzvxauhj24vjjaj6ljsp86lna7ny9p6` |
-| **Ethereum** | ETH / ERC-20 | `0x7958b8eC663f6062F1F5943aD87b2e8C8f945233` |
-| **Solana** | SOL | `7XpptWv6db53GYiHXioUnr9phHV5tB7zo5z9wvLynFGC` |
-| **Monero** | XMR | `8BL7SNroN7XGqxS8CmgBQyPB7UPSZ2uKtRSHmSk815GNh56oKFpmdWh2Ko2Pe4XsjM3oChNpkh5bxVzgSvvgaPBNGR7TJ4d` |
-| **Litecoin** | LTC | `LdKdCyq7SEhELJa7kvH9Unu8dTnn3Dm9i8` |
-
-> *Note: The Ethereum address supports ETH, USDT, USDC, Polygon, and BNB Chain.*
 
 ---
 
