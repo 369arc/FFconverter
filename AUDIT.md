@@ -141,20 +141,17 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 
 ## Open items / recommendations
 
-1. **Old v1.0 assets.** The v1.0 release is now marked deprecated, but its
-   broken assets are still downloadable. Delete them if repository owners do
-   not want to keep them for history.
-2. **Repository history.** Deleting the 96 MB Flatpak and 68 MB of wheels from
+1. **Repository history.** Deleting the 96 MB Flatpak and 68 MB of wheels from
    the working tree does not shrink existing clones. If repository size
    matters, rewrite history with `git filter-repo` and force-push — a
    destructive operation that needs owner approval.
-3. **Old `debian/` and root spec.** Removed because they were not the files
+2. **Old `debian/` and root spec.** Removed because they were not the files
    used for the release and could not build from a clean checkout. Standard
    `dpkg-buildpackage` packaging can be added later on top of
    `packaging/build-deb.sh`.
-4. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
+3. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
    Wayland, KDE, and a HiDPI display before release.
-5. **Translations/settings persistence** are not part of this audit.
+4. **Translations/settings persistence** are not part of this audit.
 
 ## Notes on the audit environment
 
