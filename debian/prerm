@@ -1,7 +1,0 @@
-#!/bin/bash
-set -e
-
-# Remove launcher
-rm -f /usr/bin/FFConverter
-
-exit 0

@@ -1,23 +1,23 @@
 app-id: com.ffconverter.FFConverter
 runtime: org.freedesktop.Platform
-runtime-version: '23.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: ffconverter-launcher
 
 finish-args:
   - --share=ipc
-  - --socket=x11
+  - --socket=fallback-x11
   - --socket=wayland
   - --socket=pulseaudio
-  - --share=network
-  - --filesystem=home
   - --device=dri
+  - --filesystem=home
 
 add-extensions:
   org.freedesktop.Platform.ffmpeg-full:
     directory: lib/ffmpeg
     add-ld-path: .
-    version: '23.08'
+    version: '25.08'
+    autodownload: true
 
 modules:
   - name: python-deps
@@ -41,14 +41,18 @@ modules:
     build-commands:
       - mkdir -p /app/bin /app/share/ffconverter /app/share/applications /app/share/icons/hicolor/256x256/apps /app/share/licenses/com.ffconverter.FFConverter
       - cp ffc.py /app/share/ffconverter/
+      - cp -r resources /app/share/ffconverter/
       - cp ffconverter-launcher /app/bin/
       - cp com.ffconverter.FFConverter.desktop /app/share/applications/
       - cp com.ffconverter.FFConverter.png /app/share/icons/hicolor/256x256/apps/
       - cp LICENSE /app/share/licenses/com.ffconverter.FFConverter/
+      - cp THIRD_PARTY_NOTICES.md /app/share/licenses/com.ffconverter.FFConverter/
       - chmod +x /app/bin/ffconverter-launcher
     sources:
       - type: file
         path: ffc.py
+      - type: dir
+        path: resources
       - type: file
         path: ffconverter-launcher
       - type: file
@@ -57,3 +61,5 @@ modules:
         path: com.ffconverter.FFConverter.png
       - type: file
         path: LICENSE
+      - type: file
+        path: THIRD_PARTY_NOTICES.md

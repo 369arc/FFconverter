@@ -1,0 +1,90 @@
+name: Build and test
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-tk ffmpeg xvfb
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Smoke test (headless GUI)
+        run: |
+          xvfb-run -a timeout 8 python3 ffc.py --version
+
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build .deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 dpkg-dev
+          chmod +x packaging/*.sh
+          ./packaging/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+
+  rpm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build .rpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 rpm
+          chmod +x packaging/*.sh
+          ./packaging/build-rpm.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  portable:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build portable tarball
+        run: |
+          chmod +x packaging/*.sh
+          ./packaging/build-portable.sh --arch x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-x86_64
+          path: dist/FFConverter-portable-x86_64.tar.xz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deb, rpm, portable]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

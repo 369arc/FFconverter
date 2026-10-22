@@ -14,34 +14,47 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-# Note: FFmpeg binaries bundled with this application are licensed
-# separately under LGPL. See the LICENSE file for full details.
+# Note: Bundled FFmpeg builds are licensed separately; most static builds are
+# GPL, not LGPL. See THIRD_PARTY_NOTICES.md for details.
 
 # Modules
+import argparse
 import os
-import sys
-
-# Suppress CustomTkinter config warnings during import and initialization
-original_stderr = sys.stderr
-sys.stderr = open(os.devnull, "w")
-
-try:
-    import customtkinter as ctk
-
-    # Also suppress during CTk initialization
-    ctk.set_appearance_mode("Dark")
-    ctk.set_default_color_theme("blue")
-
-finally:
-    sys.stderr = original_stderr
-
-import concurrent.futures
+import queue
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections import deque
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional, Tuple
+
+__version__ = "1.1.0"
+
+# A desktop application must fail with a readable message, not a bare traceback,
+# when its GUI dependencies are missing.
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+
+    import customtkinter as ctk
+except ImportError as exc:  # pragma: no cover - depends on the host system
+    sys.stderr.write(
+        "FFConverter cannot start because a Python GUI dependency is missing:\n"
+        f"  {exc}\n\n"
+        "Install Tk support for Python and the application dependencies:\n"
+        "  Debian/Ubuntu: sudo apt install python3-tk\n"
+        "  Fedora:        sudo dnf install python3-tkinter\n"
+        "  Arch:          sudo pacman -S tk\n"
+        "  Then run:      ./run.sh\n"
+    )
+    raise SystemExit(1) from exc
+
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
 
 # Check for tkinterdnd2 availability for drag-and-drop support
 try:
@@ -77,54 +90,82 @@ if TKINTERDND_AVAILABLE:
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            # Initialize the drag-and-drop mechanism
-            self.TkdndVersion = TkinterDnD._require(self)
+            # Drag and drop is optional. A missing X11 helper library (for
+            # example libXcursor on a minimal container) used to abort the
+            # whole application here; fall back to a normal Tk window instead.
+            self.dnd_ready = False
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                self.dnd_ready = True
+            except Exception as exc:
+                if os.environ.get("FFCONVERTER_DEBUG"):
+                    print(f"Warning: drag-and-drop disabled: {exc}")
 else:
     # Fallback to standard CTk if tkinterdnd2 is not installed
     CTkDnD = ctk.CTk
 
 # Config
-# Note: Appearance settings are already set in the import suppression block above
 
 # Paths
 CURRENT_DIR = Path(__file__).parent.absolute()
 
 def _get_ffmpeg_path():
-    if os.name == "nt":
-        FFMPEG_EXE = "ffmpeg.exe"
-        FFMPEG_PATHS = [
-            CURRENT_DIR / "resources" / "ffmpeg" / FFMPEG_EXE,
-            CURRENT_DIR / FFMPEG_EXE,
-        ]
-        return next(
-            (str(p) for p in FFMPEG_PATHS if isinstance(p, Path) and p.exists()),
-            shutil.which("ffmpeg") or "ffmpeg.exe",
-        )
-    else:
-        # Linux/macOS - Check AppImage paths first
-        appimage_ffmpeg = None
-        
-        # Check if running as AppImage (look for runtime marker)
-        if os.environ.get("APPIMAGE"):
-            appdir = os.environ.get("APPDIR", os.path.dirname(os.environ["APPIMAGE"]))
-            appimage_paths = [
-                Path(appdir) / "usr" / "bin" / "ffmpeg",
-                Path(appdir) / "ffmpeg",
-            ]
-            for p in appimage_paths:
-                if p.exists():
-                    appimage_ffmpeg = str(p)
-                    break
-        
-        if appimage_ffmpeg:
-            return appimage_ffmpeg
-        
-        # Fall back to system ffmpeg
-        return shutil.which("ffmpeg") or "ffmpeg"
+    """Return the FFmpeg executable to use, preferring a bundled build."""
+    exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    bundled = [
+        CURRENT_DIR / "usr" / "bin" / exe,
+        CURRENT_DIR / "resources" / "ffmpeg" / exe,
+        CURRENT_DIR / exe,
+    ]
+
+    # AppImage layout: $APPDIR/usr/bin/ffmpeg
+    if os.environ.get("APPDIR"):
+        bundled.insert(0, Path(os.environ["APPDIR"]) / "usr" / "bin" / exe)
+
+    for path in bundled:
+        if path.is_file():
+            return str(path)
+
+    return shutil.which(exe) or exe
+
+
+def _get_ffprobe_path(ffmpeg_path: str) -> str:
+    """Find ffprobe next to ffmpeg, falling back to PATH."""
+    ffmpeg = Path(ffmpeg_path)
+    if ffmpeg.name in ("ffmpeg", "ffmpeg.exe"):
+        candidate = ffmpeg.with_name("ffprobe" + (".exe" if os.name == "nt" else ""))
+        if candidate.is_file():
+            return str(candidate)
+
+    return shutil.which("ffprobe") or "ffprobe"
+
 
 FFMPEG_PATH = _get_ffmpeg_path()
+FFPROBE_PATH = _get_ffprobe_path(FFMPEG_PATH)
+
+# Print the actual executable only in debug mode; desktop launchers have no
+# visible terminal and the old unconditional print looked like an error.
+if os.environ.get("FFCONVERTER_DEBUG"):
+    print(f"FFmpeg: {FFMPEG_PATH}")
+    print(f"FFprobe: {FFPROBE_PATH}")
+
+
+def ffmpeg_available() -> bool:
+    """Return True when the selected FFmpeg executable can actually be run."""
+    try:
+        result = subprocess.run(
+            [FFMPEG_PATH, "-version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
 
 FOLDER_ICON_PATH = CURRENT_DIR / "resources" / "images" / "folder_icon.png"
+LOGO_PATH = CURRENT_DIR / "resources" / "images" / "LOGO_256.png"
 
 # Formats
 VIDEO_FORMATS = [
@@ -148,11 +189,9 @@ VIDEO_FORMATS = [
     "OGV",
     "M4V",
     "NUT",
-    "DV",
     "APNG",
     "ASF",
     "WTV",
-    "GXF",
     "IVF",
     "H264",
     "H265",
@@ -178,6 +217,9 @@ AUDIO_FORMATS = [
     "AU",
     "TTA",
 ]
+# Output formats shown in the Image tab. Input-only formats (RAW camera
+# files, PDF, PSD, SVG, HEIC, ...) are deliberately not offered as outputs:
+# FFmpeg can read many of them but cannot encode them on a normal distribution.
 IMAGE_FORMATS = [
     "JPG",
     "JPEG",
@@ -186,19 +228,11 @@ IMAGE_FORMATS = [
     "GIF",
     "TIFF",
     "TIF",
-    "HEIC",
-    "HEIF",
     "AVIF",
     "BMP",
     "ICO",
     "TGA",
-    "PDF",
-    "PSD",
-    "EPS",
-    "AI",
-    "SVG",
     "DPX",
-    "Y4M",
     "PPM",
     "PBM",
     "PGM",
@@ -209,13 +243,116 @@ IMAGE_FORMATS = [
     "XWD",
     "SUN",
     "QOI",
-    "CR2",
-    "NEF",
-    "ARW",
-    "DNG",
-    "RAF",
-    "ORF",
 ]
+
+IMAGE_INPUT_FORMATS = IMAGE_FORMATS + [
+    "PSD",
+    "SVG",
+]
+
+VIDEO_INPUT_FORMATS = VIDEO_FORMATS + [
+    "MTS",
+    "M2T",
+    "F4V",
+    "RM",
+    "RMVB",
+    "DIVX",
+    "OGM",
+    "DVR-MS",
+    "DV",
+    "GXF",
+]
+
+AUDIO_INPUT_FORMATS = AUDIO_FORMATS + [
+    "M4B",
+    "OGA",
+    "SPX",
+    "CAF",
+    "APE",
+    "MPC",
+    "RA",
+    "AIF",
+    "AIFC",
+]
+
+# Audio codec that is safe in each video container. "copy" keeps the source
+# stream (only used in ORIGINAL/COPY mode).
+VIDEO_AUDIO_CODEC = {
+    "mp4": "aac",
+    "m4v": "aac",
+    "mov": "aac",
+    "mkv": "aac",
+    "webm": "libopus",
+    "avi": "libmp3lame",
+    "ts": "aac",
+    "m2ts": "aac",
+    "flv": "aac",
+    "swf": "libmp3lame",
+    "wmv": "wmav2",
+    "asf": "wmav2",
+    "wtv": "wmav2",
+    "mpg": "mp2",
+    "mpeg": "mp2",
+    "vob": "mp2",
+    "mxf": "pcm_s16le",
+    "gxf": "pcm_s16le",
+    "dv": "pcm_s16le",
+    "ogg": "libvorbis",
+    "ogv": "libvorbis",
+    "3gp": "aac",
+    "3g2": "aac",
+    "nut": "aac",
+}
+
+# Containers that cannot carry audio at all.
+VIDEO_NO_AUDIO = {"h264", "h265", "hevc", "apng", "ivf"}
+
+VIDEO_CODEC_MAP = {
+    "WEBM": "libvpx-vp9",
+    "WMV": "wmv2",
+    "ASF": "wmv2",
+    "WTV": "wmv2",
+    "FLV": "flv",
+    "SWF": "flv",
+    "MPG": "mpeg1video",
+    "MPEG": "mpeg1video",
+    "VOB": "mpeg2video",
+    "MXF": "mpeg2video",
+    "GXF": "mpeg2video",
+    "DV": "dvvideo",
+    "APNG": "apng",
+    "OGG": "libtheora",
+    "OGV": "libtheora",
+    "IVF": "libvpx",
+    "H264": "libx264",
+    "H265": "libx265",
+    "HEVC": "libx265",
+}
+
+# Encoders that understand -crf/-preset. Others get a generic quality flag.
+CRF_ENCODERS = {
+    "libx264",
+    "libx265",
+    "libvpx",
+    "libvpx-vp9",
+    "libaom-av1",
+    "libsvtav1",
+}
+PRESET_ENCODERS = {"libx264", "libx265"}
+
+# Human-readable target resolution for the bitrate presets. The label in the
+# UI promises a resolution, so actually scale to it instead of only setting a
+# bitrate (the old behaviour made "KEEP ASPECT RATIO" a no-op).
+VIDEO_RESOLUTIONS = {
+    "8K (50M)": (7680, 4320),
+    "4K (20M)": (3840, 2160),
+    "1440P (10M)": (2560, 1440),
+    "1080P (5M)": (1920, 1080),
+    "720P (2M)": (1280, 720),
+    "480P (1.5M)": (854, 480),
+    "360P (1M)": (640, 360),
+}
+
 
 # Presets
 AUDIO_SETTINGS = {
@@ -225,7 +362,9 @@ AUDIO_SETTINGS = {
     },
     "OGG": {
         "type": "bitrate",
-        "options": ["320K", "256K", "192K", "128K", "96K", "64K"],
+        # libvorbis rejects 256K/320K at common sample rates ("could not open
+        # encoder"); 224K is the practical maximum and 192K is a safe default.
+        "options": ["192K", "128K", "96K", "64K", "48K"],
     },
     "M4A": {
         "type": "bitrate",
@@ -470,6 +609,80 @@ APP_CONFIG = {
         "green": "green",
     },
 }
+
+
+# Pure helpers (kept outside the GUI class so they can be unit-tested without
+# a display).
+def unique_output_path(
+    directory: Path,
+    stem: str,
+    extension: str,
+    reserved: Optional[set] = None,
+) -> Path:
+    """Return a non-existing output path, never silently overwriting a file.
+
+    Two inputs such as ``clip.mp4`` and ``clip.mkv`` used to produce the same
+    ``clip_converted.mp4`` and the second conversion overwrote the first one.
+    ``reserved`` lets the caller reserve names before the files exist.
+    """
+    ext = extension.lower().lstrip(".")
+    reserved = reserved if reserved is not None else set()
+
+    candidate = directory / f"{stem}_converted.{ext}"
+    counter = 1
+    while candidate.exists() or candidate in reserved:
+        candidate = directory / f"{stem}_converted_{counter}.{ext}"
+        counter += 1
+
+    reserved.add(candidate)
+    return candidate
+
+
+def parse_ffmpeg_progress(line: str) -> dict:
+    """Parse one ``-progress pipe:1`` key/value line."""
+    line = line.strip()
+    if "=" not in line:
+        return {}
+    key, value = line.split("=", 1)
+    if key in ("out_time_us", "out_time_ms"):
+        try:
+            return {"seconds": int(value) / 1_000_000}
+        except ValueError:
+            return {}
+    if key == "out_time":
+        match = re.fullmatch(r"(\d+):(\d+):(\d+(?:\.\d+)?)", value)
+        if match:
+            hours, minutes, seconds = match.groups()
+            return {
+                "seconds": int(hours) * 3600
+                + int(minutes) * 60
+                + float(seconds)
+            }
+    if key == "speed":
+        return {"speed": value}
+    if key == "progress":
+        return {"progress": value}
+    return {}
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+
+
+def tab_for_path(path: str) -> Optional[str]:
+    """Guess which tab a file belongs to from its extension."""
+    suffix = Path(path).suffix.lower().lstrip(".")
+    checks = (
+        ("Video", {ext.lower() for ext in VIDEO_INPUT_FORMATS}),
+        ("Audio", {ext.lower() for ext in AUDIO_INPUT_FORMATS}),
+        ("Image", {ext.lower() for ext in IMAGE_INPUT_FORMATS}),
+    )
+    for tab, extensions in checks:
+        if suffix in extensions:
+            return tab
+    return None
+
 
 
 # FileDialog
@@ -829,7 +1042,7 @@ class CustomFileDialog(ctk.CTkToplevel):
             try:
                 send2trash(f)
                 deleted += 1
-            except:
+            except Exception:
                 pass
 
         if deleted:
@@ -1372,19 +1585,25 @@ class CustomSizeDialog(ctk.CTkToplevel):
         try:
             W = int(self.width_entry.get().strip())
             H = int(self.height_entry.get().strip())
-
-            if W > 0 and H > 0:
-                self.result = (str(W), str(H))
-                if self.winfo_exists():
-                    self.destroy()
-            else:
-                self.result = None
-                if self.winfo_exists():
-                    self.destroy()
         except ValueError:
-            self.result = None
-            if self.winfo_exists():
-                self.destroy()
+            messagebox.showerror(
+                "Invalid size",
+                "Enter positive whole numbers for width and height.",
+                parent=self,
+            )
+            return
+
+        if W <= 0 or H <= 0:
+            messagebox.showerror(
+                "Invalid size",
+                "Width and height must be greater than zero.",
+                parent=self,
+            )
+            return
+
+        self.result = (str(W), str(H))
+        if self.winfo_exists():
+            self.destroy()
 
     def _cancel_action(self):
         # Clears the result and closes the dialog.
@@ -1409,16 +1628,14 @@ class FFConverterApp(CTkDnD):
         self.grid_rowconfigure(1, weight=0)
         self.grid_rowconfigure(2, weight=1)
 
-        if not TKINTERDND_AVAILABLE:
-            print("Warning: Drag-and-drop disabled. Install: pip install tkinterdnd2")
+        if not TKINTERDND_AVAILABLE and os.environ.get("FFCONVERTER_DEBUG"):
+            print("Warning: Drag-and-drop disabled (tkinterdnd2 is not installed)")
 
-        if not SEND2TRASH_AVAILABLE:
-            print("Warning: Safe deletion disabled. Install: pip install send2trash")
+        if not SEND2TRASH_AVAILABLE and os.environ.get("FFCONVERTER_DEBUG"):
+            print("Warning: Safe deletion disabled (send2trash is not installed)")
 
-        if not PYSTRAY_AVAILABLE:
-            print("Warning: System tray icon disabled. Install: pip install pystray pillow")
-        else:
-            self._setup_tray_icon()
+        if not PYSTRAY_AVAILABLE and os.environ.get("FFCONVERTER_DEBUG"):
+            print("Warning: System tray icon disabled (pystray/pillow missing)")
 
         # Vars
         default_msg = "FILE NOT SELECTED. CLICK ON BROWSE TO SELECT FILES"
@@ -1435,7 +1652,7 @@ class FFConverterApp(CTkDnD):
         # UI variable initialization for Video, Audio, and Image conversion settings.
         self.video_format = ctk.StringVar(value=VIDEO_FORMATS[0])
         self.video_quality_mode = ctk.StringVar(value=VIDEO_QUALITY_MODES[0])
-        self.video_quality_value = ctk.StringVar(value="8K (50M)")
+        self.video_quality_value = ctk.StringVar(value="1080P (5M)")
         self.video_frame_rate = ctk.StringVar(value="ORIGINAL (COPY)")
         self.video_keep_aspect_ratio = ctk.BooleanVar(value=True)
         self.video_deinterlace = ctk.BooleanVar(value=False)
@@ -1469,28 +1686,30 @@ class FFConverterApp(CTkDnD):
         self.current_tab_name = "Audio"  # Default
         self.nav_buttons = {}  # Store buttons to update colors
 
-        # ATTRIBUTE: Holds the active FFmpeg subprocess.
+        # Holds the active FFmpeg subprocess (one at a time).
         self.active_conversion_process: Optional[subprocess.Popen] = None
 
-        # ThreadPoolExecutor for managing conversion tasks
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-
-        # Current Future object for tracking conversion
-        self.current_future: Optional[concurrent.futures.Future] = None
-
-        # Counter for active conversions to manage progress bar properly for batch processing
-        self.conversion_counter = 0
-
-        # Per-file progress tracking
+        # Conversion state. Batch files are processed sequentially by one
+        # worker thread; the UI is only updated from the Tk main thread.
+        self.conversion_running = False
+        self.cancel_requested = False
+        self.conversion_thread: Optional[object] = None
+        self.ui_queue: "queue.Queue" = queue.Queue()
         self.converted_files_count = 0
         self.total_files_to_convert = 0
-        self.current_file_index = 0
+
+        self.last_input_dir = str(Path.home())
 
         self.common_widgets = {tab: {} for tab in ["Video", "Audio", "Image"]}
         self.video_tab_initialized = False
         self.audio_tab_initialized = True  # Audio is default, always initialized
         self.image_tab_initialized = False
-        self.ffmpeg_checked = False  # Defer FFmpeg check to first conversion
+
+        # Optional tray icon subprocess.
+        self.tray_process = None
+        self.tray_dir = None
+        self.tray_stop = threading.Event()
+        self.tray_monitor_thread = None
 
         # Tab variables for drag-and-drop
         self.tab_variables = {
@@ -1501,6 +1720,10 @@ class FFConverterApp(CTkDnD):
 
         self.folder_icon = self._load_folder_icon()
         self._create_widgets()
+        self.after(50, self._process_ui_queue)
+        self.after(250, self._check_environment)
+        if PYSTRAY_AVAILABLE:
+            self.after(500, self._setup_tray_icon)
 
     # UI Helpers
     def _create_toggle_button(self, parent, text, variable, command=None, width=None):
@@ -1606,17 +1829,173 @@ class FFConverterApp(CTkDnD):
         )
         return label
 
+    # Thread-safe UI helpers
+    def _post(self, callback):
+        """Queue a callback for execution in the Tk main thread."""
+        self.ui_queue.put(callback)
+
+    def _process_ui_queue(self):
+        try:
+            while True:
+                callback = self.ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as exc:  # keep the event loop alive
+                    print(f"[UI] callback failed: {exc}")
+        except queue.Empty:
+            pass
+        finally:
+            if self.winfo_exists():
+                self.after(50, self._process_ui_queue)
+
+    def _set_status(self, tab_name: str, message: str, is_error: bool = False):
+        widgets = self.common_widgets.get(tab_name, {})
+        label = widgets.get("help_text_label")
+        if label is not None:
+            try:
+                label.configure(
+                    text=message,
+                    text_color=(
+                        APP_CONFIG["THEME_COLORS"]["btn_cancel"]
+                        if is_error
+                        else APP_CONFIG["THEME_COLORS"]["text_primary"]
+                    ),
+                )
+            except Exception:
+                pass
+
+    def _set_progress(self, tab_name: str, value: Optional[float]):
+        bar = {
+            "Video": self.video_progress_bar,
+            "Audio": self.audio_progress_bar,
+            "Image": self.image_progress_bar,
+        }.get(tab_name)
+        if bar is None:
+            return
+        try:
+            if value is None:
+                bar.start()
+            else:
+                bar.stop()
+                bar.set(max(0.0, min(1.0, value)))
+        except Exception:
+            pass
+
+    def _set_convert_button(self, mode: str, converting: bool):
+        button = {
+            "Video": self.video_convert_btn,
+            "Audio": self.audio_convert_btn,
+            "Image": self.image_convert_btn,
+        }.get(mode)
+        if button is None:
+            return
+
+        if converting:
+            button.configure(
+                text="CANCEL",
+                command=self._cancel_conversion,
+                fg_color=APP_CONFIG["THEME_COLORS"]["btn_cancel"],
+                hover_color=APP_CONFIG["THEME_COLORS"]["btn_cancel_hover"],
+                state="normal",
+            )
+        else:
+            button.configure(
+                text="CONVERT",
+                command=lambda: self._start_conversion(mode),
+                fg_color=APP_CONFIG["THEME_COLORS"]["btn_green"],
+                hover_color=APP_CONFIG["THEME_COLORS"]["btn_green_hover"],
+                state="normal",
+            )
+
+    def _check_environment(self):
+        if not ffmpeg_available():
+            message = (
+                "FFmpeg was not found. Install it (sudo apt install ffmpeg / "
+                "sudo dnf install ffmpeg) or use a build with bundled FFmpeg."
+            )
+            for tab in ("Video", "Audio", "Image"):
+                self._set_status(tab, f"Status: {message}", is_error=True)
+            return
+
+        if not Path(FFPROBE_PATH).is_file() and shutil.which("ffprobe") is None:
+            self._set_status(
+                self.current_tab_name,
+                "Status: FFmpeg found, but ffprobe is missing. "
+                "Conversion works, progress percentage may be unavailable.",
+            )
+
+    def _set_selected_files(self, tab_name: str, files: List[str], message: str = ""):
+        files = [str(path) for path in files]
+        if tab_name == "Video":
+            self.selected_video_files = files
+        elif tab_name == "Audio":
+            self.selected_audio_files = files
+        elif tab_name == "Image":
+            self.selected_image_files = files
+        else:
+            return
+
+        names = [Path(path).name for path in files]
+        if len(names) == 1:
+            display = f"Selected: {names[0]}"
+        else:
+            display = f"Selected {len(names)} files: {names[0]}..."
+
+        if len(display) > 80:
+            display = display[:77] + "..."
+        self.tab_variables[tab_name]["input"].set(display)
+
+        if message:
+            self._set_status(tab_name, message)
+        elif files:
+            self._set_status(
+                tab_name,
+                f"Status: {len(files)} file(s) selected for {tab_name}. Ready.",
+            )
+
+    def load_files_from_args(self, paths: List[str]):
+        """Open files passed by the desktop file / command line."""
+        files = [str(Path(path).expanduser()) for path in paths]
+        files = [path for path in files if Path(path).is_file()]
+        if not files:
+            return
+
+        first_tab = tab_for_path(files[0])
+        if first_tab is None:
+            messagebox.showwarning(
+                "Unsupported file",
+                "The file type is not supported. Open it from the appropriate "
+                "Video, Audio, or Image tab instead.",
+            )
+            return
+
+        valid, rejected = self._validate_files(files, first_tab)
+        self._change_tab(first_tab)
+        if valid:
+            self._set_selected_files(first_tab, valid)
+        if rejected:
+            self._set_status(
+                first_tab,
+                f"Status: {len(rejected)} file(s) ignored because they do not "
+                f"match the {first_tab} tab.",
+                is_error=True,
+            )
+
     # Load Icon
     def _load_folder_icon(self) -> Optional[ctk.CTkImage]:
         # Attempts to load a folder icon image using PIL for the 'Open Folder' button.
         try:
             from PIL import Image
 
-            if FOLDER_ICON_PATH.exists():
-                img = Image.open(FOLDER_ICON_PATH)
-                return ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+            for path in (FOLDER_ICON_PATH, LOGO_PATH):
+                if path.exists():
+                    img = Image.open(path)
+                    return ctk.CTkImage(
+                        light_image=img, dark_image=img, size=(20, 20)
+                    )
         except Exception as e:
-            print(f"Warning: Could not load folder icon: {e}")
+            if os.environ.get("FFCONVERTER_DEBUG"):
+                print(f"Warning: Could not load folder icon: {e}")
         return None
 
     # Create UI
@@ -2137,6 +2516,12 @@ class FFConverterApp(CTkDnD):
                 self.video_quality_value.set(options[0])
             elif selected_mode == "CRF (CONSTANT QUALITY)":
                 self.video_quality_value.set("23 (GOOD - DEFAULT)")
+            elif selected_mode == "BITRATE (CBR/VBR AVG)":
+                self.video_quality_value.set(
+                    "1080P (5M)"
+                    if "1080P (5M)" in options
+                    else options[0]
+                )
             elif options:
                 self.video_quality_value.set(options[0])
             else:
@@ -2543,13 +2928,15 @@ class FFConverterApp(CTkDnD):
         # Returns (valid_files, rejected_files)
 
         if tab_name == "Video":
-            allowed_formats = VIDEO_FORMATS
+            allowed_formats = VIDEO_INPUT_FORMATS
         elif tab_name == "Audio":
-            allowed_formats = AUDIO_FORMATS
+            allowed_formats = AUDIO_INPUT_FORMATS
         elif tab_name == "Image":
-            allowed_formats = IMAGE_FORMATS
+            allowed_formats = IMAGE_INPUT_FORMATS
         else:
-            allowed_formats = VIDEO_FORMATS + AUDIO_FORMATS + IMAGE_FORMATS
+            allowed_formats = (
+                VIDEO_INPUT_FORMATS + AUDIO_INPUT_FORMATS + IMAGE_INPUT_FORMATS
+            )
 
         # Convert to lowercase for case-insensitive comparison
         allowed_extensions = {ext.lower() for ext in allowed_formats}
@@ -2571,13 +2958,13 @@ class FFConverterApp(CTkDnD):
         # Builds the list of file type tuples for the file dialog based on the current tab (mode).
         # The format is [('Description', '*.ext1 *.ext2'), ...]
         if mode == "Video":
-            format_list = VIDEO_FORMATS
+            format_list = VIDEO_INPUT_FORMATS
             description = "Video Files"
         elif mode == "Audio":
-            format_list = AUDIO_FORMATS
+            format_list = AUDIO_INPUT_FORMATS
             description = "Audio Files"
         elif mode == "Image":
-            format_list = IMAGE_FORMATS
+            format_list = IMAGE_INPUT_FORMATS
             description = "Image Files"
         else:
             # Fallback for unexpected mode, ensures *.* is present
@@ -2650,7 +3037,7 @@ class FFConverterApp(CTkDnD):
                 if result.stdout.strip():
                     return result.stdout.strip().split("|")
                 return None  # Dialog was cancelled
-            except:
+            except Exception:
                 pass
 
         elif os.uname().sysname == "Darwin":
@@ -2687,7 +3074,7 @@ class FFConverterApp(CTkDnD):
                 if result.returncode == 0 and result.stdout.strip():
                     return result.stdout.strip().split(", ")
                 return None  # Dialog was cancelled
-            except:
+            except Exception:
                 pass
 
         else:
@@ -2732,10 +3119,12 @@ class FFConverterApp(CTkDnD):
                     title,
                     "--getopenfilename",
                     initial_dir_expanded,
-                    "--multiple",
                 ]
                 if combined_filter:
-                    cmd.extend(["--multiple", "--filter", combined_filter])
+                    cmd.append(f"Supported files ({combined_filter})")
+                else:
+                    cmd.append("*")
+                cmd.append("--multiple")
                 result = sp.run(cmd, capture_output=True, text=True, timeout=300)
                 native_tool_used = True
                 if result.returncode == 0 and result.stdout.strip():
@@ -2795,7 +3184,7 @@ class FFConverterApp(CTkDnD):
 
         file_paths = self._native_file_dialog(
             title=title,
-            initial_dir=self.output_dir.get(),
+            initial_dir=self.last_input_dir,
             filetypes=filetypes,
         )
 
@@ -2803,56 +3192,30 @@ class FFConverterApp(CTkDnD):
             valid_files, rejected_files = self._validate_files(file_paths, current_tab)
 
             if valid_files:
-                # Store actual file paths for conversion
-                if current_tab == "Video":
-                    self.selected_video_files = valid_files
-                elif current_tab == "Audio":
-                    self.selected_audio_files = valid_files
-                elif current_tab == "Image":
-                    self.selected_image_files = valid_files
-
-                # Display only file names (not full paths) with count, single line only
-                file_names = [Path(f).name for f in valid_files]
-                if len(valid_files) == 1:
-                    display_text = f"Selected: {file_names[0]}"
-                else:
-                    display_text = (
-                        f"Selected {len(valid_files)} files: {file_names[0]}..."
-                    )
-
-                # Truncate to ensure single line display (max ~80 chars)
-                max_len = 80
-                if len(display_text) > max_len:
-                    display_text = display_text[: max_len - 3] + "..."
-
-                if current_tab == "Video":
-                    self.video_input_path.set(display_text)
-                elif current_tab == "Audio":
-                    self.audio_input_path.set(display_text)
-                elif current_tab == "Image":
-                    self.image_input_path.set(display_text)
-
+                self.last_input_dir = str(Path(valid_files[0]).parent)
                 status_msg = (
                     f"Status: {len(valid_files)} file(s) selected for {current_tab}."
                 )
                 if rejected_files:
                     rejected_names = [Path(f).name for f in rejected_files]
-                    status_msg += f" Rejected {len(rejected_files)} invalid file(s): {', '.join(rejected_names[:3])}{'...' if len(rejected_names) > 3 else ''}."
+                    status_msg += (
+                        f" Rejected {len(rejected_files)} invalid file(s): "
+                        f"{', '.join(rejected_names[:3])}"
+                        f"{'...' if len(rejected_names) > 3 else ''}."
+                    )
                 status_msg += " Ready."
-
-                self.common_widgets[current_tab]["help_text_label"].configure(
-                    text=status_msg
-                )
+                self._set_selected_files(current_tab, valid_files, status_msg)
             else:
                 rejected_names = [Path(f).name for f in rejected_files]
-                status_msg = f"Status: All {len(rejected_files)} selected file(s) are invalid for {current_tab} tab: {', '.join(rejected_names[:3])}{'...' if len(rejected_names) > 3 else ''}."
-                self.common_widgets[current_tab]["help_text_label"].configure(
-                    text=status_msg
+                status_msg = (
+                    f"Status: All {len(rejected_files)} selected file(s) are "
+                    f"invalid for {current_tab} tab: "
+                    f"{', '.join(rejected_names[:3])}"
+                    f"{'...' if len(rejected_names) > 3 else ''}."
                 )
+                self._set_status(current_tab, status_msg, is_error=True)
         else:
-            self.common_widgets[current_tab]["help_text_label"].configure(
-                text="Status: File selection cancelled. Ready."
-            )
+            self._set_status(current_tab, "Status: File selection cancelled. Ready.")
 
     # Native Dir
     def _native_directory_dialog(self, title, initial_dir):
@@ -2890,7 +3253,7 @@ class FFConverterApp(CTkDnD):
                 if result.stdout.strip():
                     return result.stdout.strip()
                 return None
-            except:
+            except Exception:
                 pass
 
         elif os.uname().sysname == "Darwin":
@@ -2910,7 +3273,7 @@ class FFConverterApp(CTkDnD):
                 if result.returncode == 0 and result.stdout.strip():
                     return result.stdout.strip()
                 return None
-            except:
+            except Exception:
                 pass
 
         else:
@@ -3076,80 +3439,116 @@ class FFConverterApp(CTkDnD):
 
     # Video Args
     def _build_video_args(self, cmd: List[str]) -> str:
-        # Builds FFmpeg command arguments for video conversion.
-        output_format = self.video_format.get()
+        """Build video arguments and return the (lowercase) output extension."""
+        output_format = self.video_format.get().lower()
         quality_mode = self.video_quality_mode.get()
         quality_value_setting = self.video_quality_value.get()
 
-        if self.video_remove_audio.get():
+        # "Remove video" is really an audio extraction. Do it explicitly,
+        # otherwise the old code still emitted a video codec and a .wav file
+        # with a 32-bit float stream that many players dislike.
+        if self.video_remove_video.get():
+            cmd.extend(["-vn", "-c:a", "pcm_s16le", "-ar", "48000"])
+            return "wav"
+
+        no_audio = self.video_remove_audio.get() or output_format in VIDEO_NO_AUDIO
+        if self.video_remove_audio.get() or output_format in VIDEO_NO_AUDIO:
             cmd.append("-an")
-        elif self.video_remove_video.get():
-            cmd.append("-vn")
-            output_format = "wav"
-            cmd.extend(["-c:a", "pcm_f32le"])
 
-        video_codec_map = {
-            "WEBM": "libvpx-vp9",
-            "WMV": "wmv2",
-            "ASF": "wmv2",
-            "WTV": "wmv3",
-            "FLV": "flv",
-            "SWF": "flv",
-            "MPG": "mpeg1video",
-            "MPEG": "mpeg1video",
-            "VOB": "mpeg2video",
-            "MXF": "mpeg2video",
-            "GXF": "mpeg2video",
-            "DV": "dvvideo",
-            "APNG": "apng",
-            "OGG": "libtheora",
-            "OGV": "libtheora",
-            "IVF": "libvpx",
-            "H264": "libx264",
-            "H265": "libx265",
-            "HEVC": "libx265",
-        }
+        video_codec = VIDEO_CODEC_MAP.get(
+            output_format.upper(), "libx264"
+        )
 
-        default_codec = "libx264"
-        video_codec = video_codec_map.get(output_format, default_codec)
+        video_filters = []
+        if self.video_deinterlace.get():
+            video_filters.append("yadif")
 
-        if quality_mode == "ORIGINAL (COPY)":
+        # The bitrate presets are labelled 8K/4K/1080P/...; actually scale to
+        # that resolution. Previously "KEEP ASPECT RATIO" did nothing.
+        if quality_mode == "BITRATE (CBR/VBR AVG)":
+            target = VIDEO_RESOLUTIONS.get(quality_value_setting)
+            if target:
+                width, height = target
+                if self.video_keep_aspect_ratio.get():
+                    video_filters.append(f"scale=-2:{height}")
+                else:
+                    video_filters.append(f"scale={width}:{height}")
+
+        frame_rate = self.video_frame_rate.get()
+        copy_mode = quality_mode == "ORIGINAL (COPY)"
+
+        if copy_mode:
+            if video_filters or frame_rate != "ORIGINAL (COPY)":
+                raise ValueError(
+                    "Original (Copy) mode cannot apply deinterlace, resizing, "
+                    "or a frame rate. Choose CRF or Bitrate mode for those options."
+                )
             cmd.extend(["-c:v", "copy"])
-            if not self.video_remove_audio.get() and not self.video_remove_video.get():
+            if not no_audio:
                 cmd.extend(["-c:a", "copy"])
         else:
             cmd.extend(["-c:v", video_codec])
 
             if quality_mode == "CRF (CONSTANT QUALITY)":
                 crf_match = re.search(r"(\d+)", quality_value_setting)
-                if crf_match:
-                    crf_value = crf_match.group(1)
-                    cmd.extend(["-crf", crf_value, "-preset", "medium"])
+                crf_value = crf_match.group(1) if crf_match else "23"
+                if video_codec in CRF_ENCODERS:
+                    cmd.extend(["-crf", crf_value])
+                    if video_codec in PRESET_ENCODERS:
+                        cmd.extend(["-preset", "medium"])
+                    elif video_codec in ("libvpx", "libvpx-vp9"):
+                        cmd.extend(
+                            ["-b:v", "0", "-deadline", "good", "-cpu-used", "2"]
+                        )
+                    elif video_codec == "libaom-av1":
+                        cmd.extend(["-b:v", "0"])
+                else:
+                    # -crf is not understood by MPEG-1/2, WMV, DV, Theora...
+                    cmd.extend(["-q:v", "3"])
 
             elif quality_mode == "BITRATE (CBR/VBR AVG)":
-                bitrate_match = re.search(r"\((\d+M)\)", quality_value_setting)
+                bitrate_match = re.search(r"\((\d+(?:\.\d+)?M)\)", quality_value_setting)
                 if bitrate_match:
                     bitrate = bitrate_match.group(1)
                     cmd.extend(["-b:v", bitrate])
                     cmd.extend(["-maxrate", bitrate, "-bufsize", bitrate])
 
-        video_filters = []
-        if self.video_deinterlace.get():
-            video_filters.append("yadif")
+            if not no_audio:
+                cmd.extend(
+                    [
+                        "-c:a",
+                        VIDEO_AUDIO_CODEC.get(output_format, "aac"),
+                    ]
+                )
 
-        if self.video_frame_rate.get() != "ORIGINAL (COPY)":
-            cmd.extend(["-r", self.video_frame_rate.get()])
+            # A widely compatible pixel format for common delivery containers.
+            if output_format in {
+                "mp4",
+                "m4v",
+                "mov",
+                "mkv",
+                "ts",
+                "m2ts",
+                "flv",
+                "3gp",
+                "3g2",
+            }:
+                cmd.extend(["-pix_fmt", "yuv420p"])
 
         if video_filters:
-            if "-c:v" not in cmd or cmd[-1] != "copy":
-                cmd.extend(["-vf", ",".join(video_filters)])
+            cmd.extend(["-vf", ",".join(video_filters)])
+        if frame_rate != "ORIGINAL (COPY)":
+            cmd.extend(["-r", frame_rate])
+
+        if output_format in {"mp4", "m4v", "mov"}:
+            cmd.extend(["-movflags", "+faststart"])
 
         return output_format
 
     # Audio Args
     def _build_audio_args(self, cmd: List[str]) -> str:
-        # Builds FFmpeg command arguments for audio conversion.
-        output_format = self.audio_format.get()
+        """Build audio arguments and return the (lowercase) output extension."""
+        output_format = self.audio_format.get().lower()
         audio_filters = self._construct_audio_filters()
 
         codec_map = {
@@ -3168,78 +3567,73 @@ class FFConverterApp(CTkDnD):
             "AIFF": "pcm_s16be",
             "ALAC": "alac",
             "WV": "wavpack",
-            "AU": "pcm_s16le",
-            "TTA": "trueaudio",
+            "AU": "pcm_s16be",
+            "TTA": "tta",
         }
 
         if audio_filters:
             cmd.extend(["-af", audio_filters])
 
-        if output_format == "MP3":
+        if output_format == "mp3":
             cmd.extend(["-c:a", "libmp3lame"])
             if self.mp3_mode.get() == "VBR":
-                vbr_setting = self.audio_quality.get().split(" ")[0].replace("V", "")
+                vbr_setting = (
+                    self.audio_quality.get().split(" ")[0].replace("V", "")
+                )
                 cmd.extend(["-q:a", vbr_setting])
             else:
                 cmd.extend(["-b:a", self.audio_quality.get()])
+        else:
+            codec = codec_map.get(output_format.upper())
+            if not codec:
+                raise ValueError(f"Unsupported audio format: {output_format}")
 
-        elif output_format in codec_map:
-            codec = codec_map[output_format]
+            cmd.extend(["-c:a", codec])
+            settings = AUDIO_SETTINGS.get(output_format.upper(), {})
+            setting_type = settings.get("type")
 
-            if audio_filters and output_format in ["wav", "flac", "aiff", "alac"]:
-                cmd.extend(["-c:a", codec])
-
-            elif "bitrate" in AUDIO_SETTINGS.get(output_format, {}).get(
-                "type", "bitrate"
-            ):
-                cmd.extend(["-c:a", codec])
+            if setting_type == "bitrate":
                 cmd.extend(["-b:a", self.audio_quality.get()])
-
-            elif not audio_filters and "samplerate" in AUDIO_SETTINGS.get(
-                output_format, {}
-            ).get("type", "samplerate"):
-                cmd.extend(["-c:a", codec])
+            elif setting_type == "samplerate":
                 samplerate = self.audio_quality.get().split(" ")[0]
                 cmd.extend(["-ar", samplerate])
+            # TTA ("compression") has no useful compression_level option in
+            # FFmpeg; selecting the codec is enough.
 
-            elif AUDIO_SETTINGS.get(output_format, {}).get("type") == "compression":
-                cmd.extend(["-c:a", codec])
-                comp = self.audio_quality.get().split(" ")[0]
-                cmd.extend(["-compression_level", comp])
+            if output_format == "dts":
+                cmd.extend(["-strict", "-2"])
+            if output_format == "m4a":
+                cmd.extend(["-movflags", "+faststart"])
+            if output_format == "amr":
+                # libopencore_amrnb only supports 8 kHz mono.
+                cmd.extend(["-ar", "8000", "-ac", "1"])
 
-        if audio_filters and "-c:a" not in cmd:
-            cmd.extend(["-c:a", "aac"])
-
+        # ALAC is stored in an MP4/M4A container; ".alac" is not a muxer name.
+        if output_format == "alac":
+            return "m4a"
         return output_format
 
     # Image Args
     def _build_image_args(self, cmd: List[str]) -> str:
-        # Builds FFmpeg command arguments for image conversion.
-        output_format = self.image_format.get()
+        """Build image arguments and return the (lowercase) output extension."""
+        output_format = self.image_format.get().lower()
         image_filters = []
 
-        if self.image_size.get() == "ORIGINAL (COPY)":
-            pass
-
-        elif self.image_size.get() == "CUSTOM (WXH)" and self.custom_image_dims:
-            W, H = self.custom_image_dims
-
+        size = self.image_size.get()
+        if size == "CUSTOM (WXH)" and self.custom_image_dims:
+            width, height = self.custom_image_dims
             if self.image_keep_aspect_ratio.get():
-                scale_filter = f"scale={W}:-1"
+                image_filters.append(f"scale={width}:-2")
             else:
-                scale_filter = f"scale={W}:{H}"
-
-            image_filters.append(scale_filter)
-        elif self.image_size.get() != "ORIGINAL (COPY)":
-            size_match = re.match(r"(\d+X\d+)", self.image_size.get())
+                image_filters.append(f"scale={width}:{height}")
+        elif size != "ORIGINAL (COPY)":
+            size_match = re.match(r"(\d+)X(\d+)", size)
             if size_match:
-                W, H = size_match.group(1).split("X")
-                scale_filter = (
-                    f"scale={W}:-1"
-                    if self.image_keep_aspect_ratio.get()
-                    else f"scale={W}:{H}"
-                )
-                image_filters.append(scale_filter)
+                width, height = size_match.groups()
+                if self.image_keep_aspect_ratio.get():
+                    image_filters.append(f"scale={width}:-2")
+                else:
+                    image_filters.append(f"scale={width}:{height}")
 
         visual_filter = self.image_visual_filter.get()
         if visual_filter == "GRAYSCALE (BLACK & WHITE)":
@@ -3249,560 +3643,374 @@ class FFConverterApp(CTkDnD):
         elif visual_filter == "INVERT COLORS":
             image_filters.append("negate")
 
+        if output_format == "ico":
+            # The ICO encoder accepts at most 256x256.
+            image_filters.append(
+                "scale=256:256:force_original_aspect_ratio=decrease"
+            )
+
         if image_filters:
             cmd.extend(["-vf", ",".join(image_filters)])
 
+        # The old comparisons used lowercase strings while the UI returned
+        # uppercase format names, so "COMPRESS" silently did nothing.
         if self.image_compress.get():
-            if output_format in ["jpg", "jpeg", "webp", "heic", "heif"]:
-                cmd.extend(["-qscale:v", "3"])
+            if output_format in {"jpg", "jpeg", "webp", "avif"}:
+                cmd.extend(["-q:v", "3"])
             elif output_format == "png":
                 cmd.extend(["-compression_level", "9"])
-            elif output_format in ["pcx", "sgi", "xwd", "sun"]:
+            elif output_format in {"pcx", "sgi", "xwd", "sun"}:
                 cmd.extend(["-compression_level", "9"])
             elif output_format == "qoi":
                 cmd.extend(["-compression_level", "1"])
+
+        if output_format in {"jpg", "jpeg"}:
+            cmd.extend(["-pix_fmt", "yuvj420p"])
+        if output_format == "gif":
+            cmd.extend(["-loop", "0"])
+        else:
+            # Avoid the image2 muxer trying to write several frames of an
+            # animated source to one filename.
+            cmd.extend(["-frames:v", "1"])
 
         return output_format
 
     # Start Convert
     def _start_conversion(self, mode: str):
-        # Main method to prepare FFmpeg command arguments and launch the conversion process in a thread.
-
-        # Defer FFmpeg check to first conversion attempt (only once)
-        if not self.ffmpeg_checked:
-            self.ffmpeg_checked = True
-            if not (FFMPEG_PATH and Path(FFMPEG_PATH).exists()):
-                messagebox.showwarning(
-                    "FFmpeg Not Found",
-                    "FFmpeg was not found on your system. Conversion features will not work. Please install FFmpeg and restart the application.",
-                )
-                # Disable convert buttons
-                if hasattr(self, 'video_convert_btn') and self.video_convert_btn:
-                    self.video_convert_btn.configure(state="disabled")
-                if hasattr(self, 'audio_convert_btn') and self.audio_convert_btn:
-                    self.audio_convert_btn.configure(state="disabled")
-                if hasattr(self, 'image_convert_btn') and self.image_convert_btn:
-                    self.image_convert_btn.configure(state="disabled")
-                return
-            else:
-                print(f"FFmpeg found: {FFMPEG_PATH}")
-
-        if (
-            self.active_conversion_process
-            and self.active_conversion_process.poll() is None
-        ):
-            self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                text="Status: WARNING! A conversion is already in progress. Please cancel it first."
+        """Validate the selection, build all FFmpeg commands, start one worker."""
+        if self.conversion_running:
+            self._set_status(
+                mode,
+                "Status: WARNING! A conversion is already in progress. Cancel it first.",
+                is_error=True,
             )
             return
 
-        # Get actual file paths from stored lists (not from display text)
-        if mode == "Video":
-            input_paths = self.selected_video_files
-        elif mode == "Audio":
-            input_paths = self.selected_audio_files
-        elif mode == "Image":
-            input_paths = self.selected_image_files
-        else:
-            self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                text="Status: ERROR! Unknown conversion mode."
+        if not ffmpeg_available():
+            messagebox.showerror(
+                "FFmpeg Not Found",
+                "FFmpeg was not found. Install FFmpeg or use a build with a "
+                "bundled FFmpeg, then restart FFConverter.",
+            )
+            self._set_status(
+                mode,
+                "Status: ERROR! FFmpeg is not installed or cannot be executed.",
+                is_error=True,
             )
             return
 
-        output_dir = Path(self.output_dir.get())
-
+        input_paths = {
+            "Video": self.selected_video_files,
+            "Audio": self.selected_audio_files,
+            "Image": self.selected_image_files,
+        }.get(mode)
         if not input_paths:
-            self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                text="Status: ERROR! Please select a valid input file."
+            self._set_status(
+                mode, "Status: ERROR! Please select at least one input file.", True
             )
             return
 
-        for input_path in input_paths:
-            if not os.path.exists(input_path):
-                self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                    text=f"Status: ERROR! Input file {Path(input_path).name} not found."
+        missing = [path for path in input_paths if not os.path.isfile(path)]
+        if missing:
+            self._set_status(
+                mode,
+                f"Status: ERROR! Input file not found: {Path(missing[0]).name}",
+                is_error=True,
+            )
+            return
+
+        output_dir = Path(self.output_dir.get()).expanduser()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._set_status(
+                mode, f"Status: ERROR! Cannot create output folder: {exc}", True
+            )
+            return
+
+        jobs = []
+        reserved = set()
+        try:
+            for input_path in input_paths:
+                cmd = [FFMPEG_PATH, "-i", input_path, "-y"]
+
+                strip_metadata = (
+                    (mode == "Video" and self.video_strip_metadata.get())
+                    or (mode == "Audio" and self.audio_strip_metadata.get())
+                    or (mode == "Image" and self.image_strip_metadata.get())
                 )
-                return
+                if strip_metadata:
+                    cmd.extend(["-map_metadata", "-1", "-map_chapters", "-1"])
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize per-file progress tracking
-        self.total_files_to_convert = len(input_paths)
-        self.converted_files_count = 0
-        self.current_file_index = 0
-
-        for idx, input_path in enumerate(input_paths):
-            self.current_file_index = idx
-            file_progress_pct = int(((idx + 1) / self.total_files_to_convert) * 100)
-
-            # Get file duration for progress calculation
-            total_duration = self._get_file_duration(input_path)
-
-            cmd = [FFMPEG_PATH, "-i", input_path, "-y"]
-            output_format = None
-
-            strip_metadata = False
-            if mode == "Video" and self.video_strip_metadata.get():
-                strip_metadata = True
-            elif mode == "Audio" and self.audio_strip_metadata.get():
-                strip_metadata = True
-            elif mode == "Image" and self.image_strip_metadata.get():
-                strip_metadata = True
-
-            if strip_metadata:
-                cmd.extend(["-map_metadata", "-1"])
-
-            try:
                 if mode == "Video":
                     output_format = self._build_video_args(cmd)
                 elif mode == "Audio":
                     output_format = self._build_audio_args(cmd)
                 elif mode == "Image":
                     output_format = self._build_image_args(cmd)
+                else:
+                    raise ValueError(f"Unknown conversion mode: {mode}")
 
                 if not output_format:
-                    self.common_widgets[self.current_tab_name][
-                        "help_text_label"
-                    ].configure(
-                        text="Status: ERROR! Please select a valid output format."
-                    )
-                    return
+                    raise ValueError("Please select a valid output format.")
 
-                base_name = Path(input_path).stem
-                output_file = output_dir / f"{base_name}_converted.{output_format}"
+                output_file = unique_output_path(
+                    output_dir, Path(input_path).stem, output_format, reserved
+                )
                 cmd.append(str(output_file))
 
-                self._toggle_progress_bar(True)
+                # Ask FFmpeg for machine-readable progress on stdout. The old
+                # code tried to parse the human stderr stats, which are written
+                # with carriage returns and therefore never reached readline().
+                cmd[-1:-1] = ["-progress", "pipe:1", "-nostats"]
 
-                # Submit conversion task to executor with file index info
-                self.current_future = self.executor.submit(
-                    self._execute_ffmpeg,
-                    cmd,
-                    mode,
-                    output_format,
-                    output_file,
-                    total_duration,
-                    idx,
-                    self.total_files_to_convert,
+                jobs.append(
+                    {
+                        "cmd": cmd,
+                        "input_path": input_path,
+                        "output_file": output_file,
+                        "output_format": output_format,
+                    }
                 )
-                # Start checking the future for completion
-                self._check_future_completion()
+        except Exception as exc:
+            self._set_status(
+                mode, f"Status: ERROR! {exc}", is_error=True
+            )
+            return
 
-            except Exception as e:
-                self._toggle_progress_bar(False)
-                self.active_conversion_process = None
-                self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                    text=f"Status: CONVERSION ERROR! {str(e)}"
-                )
+        self.conversion_running = True
+        self.cancel_requested = False
+        self.conversion_mode = mode
+        self.total_files_to_convert = len(jobs)
+        self.converted_files_count = 0
+        self._set_progress(mode, 0)
+        self._set_convert_button(mode, True)
+        self._set_status(
+            mode,
+            f"Status: Starting conversion of {len(jobs)} file(s)...",
+        )
+
+        self.conversion_thread = threading.Thread(
+            target=self._conversion_worker,
+            args=(mode, jobs),
+            daemon=True,
+        )
+        self.conversion_thread.start()
 
     # Cancel
     def _cancel_conversion(self):
-        # Terminates the running FFmpeg process and updates the UI state.
+        if not self.conversion_running:
+            return
 
-        if self.current_future and not self.current_future.done():
-            self.current_future.cancel()
-            self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                text="Status: Cancellation requested..."
+        self.cancel_requested = True
+        mode = self.conversion_mode
+        self._set_status(mode, "Status: Cancelling conversion...", is_error=True)
+
+        process = self.active_conversion_process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+            # SIGTERM is sometimes ignored while FFmpeg is writing a large
+            # file; make sure the process really goes away.
+            threading.Timer(3.0, self._force_kill, args=(process,)).start()
+
+    def _force_kill(self, process):
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    def _conversion_worker(self, mode: str, jobs: List[dict]):
+        total = len(jobs)
+        completed = 0
+        failures = []
+
+        for index, job in enumerate(jobs):
+            if self.cancel_requested:
+                break
+
+            input_name = Path(job["input_path"]).name
+            duration = self._get_file_duration(job["input_path"])
+
+            self._post(
+                lambda i=index, n=input_name: self._set_status(
+                    mode, f"Status: Converting {i + 1}/{total}: {n}"
+                )
+            )
+            if duration is None:
+                self._post(lambda: self._set_progress(mode, None))
+
+            return_code, error_text = self._run_ffmpeg(
+                job, index, total, duration, mode
             )
 
-        if (
-            self.active_conversion_process
-            and self.active_conversion_process.poll() is None
-        ):
-            try:
-                self.active_conversion_process.terminate()
-            except Exception as e:
-                print(f"Error terminating process: {e}")
+            if self.cancel_requested and return_code != 0:
+                break
 
-        # Reset per-file progress counters
-        self.converted_files_count = 0
-        self.total_files_to_convert = 0
+            if return_code == 0:
+                completed += 1
+                self._post(
+                    lambda i=index: self._set_progress(
+                        mode, (i + 1) / total if total else 1.0
+                    )
+                )
+                self._post(
+                    lambda c=completed, n=input_name: self._set_status(
+                        mode, f"Status: Completed {c}/{total} files. Last: {n}"
+                    )
+                )
+            else:
+                # Do not leave a truncated output file behind.
+                try:
+                    job["output_file"].unlink(missing_ok=True)
+                except OSError:
+                    pass
+                failures.append((job["input_path"], error_text))
+                short_error = " ".join(error_text.split())[:180]
+                self._post(
+                    lambda n=input_name, e=short_error: self._set_status(
+                        mode,
+                        f"Status: FFmpeg ERROR on {n}: {e}",
+                        is_error=True,
+                    )
+                )
 
-        self._toggle_progress_bar(False)
-        self._conversion_complete()
-        self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-            text="Status: Conversion Cancelled by user."
+        self._post(
+            lambda: self._conversion_finished(mode, total, completed, failures)
         )
 
-    # Check Future
-    def _check_future_completion(self):
-        # Periodically checks if the current Future is done and handles completion.
-        if self.current_future and self.current_future.done():
-            try:
-                # Check for any exceptions that occurred in the worker thread
-                self.current_future.result()
-            except Exception as e:
-                # Handle any unhandled exceptions from the worker thread
-                print(f"Conversion error: {e}")
-                self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                    text=f"Status: CONVERSION ERROR! {str(e)}"
-                )
-                self._toggle_progress_bar(False)
-
-            self._conversion_complete()
-            self.current_future = None
-        else:
-            # Schedule next check
-            self.after(100, self._check_future_completion)
-
-    # Complete
-    def _conversion_complete(self):
-        # Resets the active conversion process variable to None upon completion.
+    def _conversion_finished(
+        self, mode: str, total: int, completed: int, failures: List[Tuple[str, str]]
+    ):
+        self.conversion_running = False
         self.active_conversion_process = None
+        self._set_convert_button(mode, False)
+
+        if self.cancel_requested:
+            self._set_progress(mode, 1.0 if completed else 0.0)
+            self._set_status(
+                mode,
+                f"Status: Conversion cancelled. Completed {completed}/{total} file(s).",
+                is_error=True,
+            )
+        elif failures:
+            self._set_progress(mode, completed / total if total else 0.0)
+            first_error = " ".join(failures[0][1].split())[:220]
+            self._set_status(
+                mode,
+                f"Status: Finished with errors: {completed}/{total} converted. "
+                f"{first_error}",
+                is_error=True,
+            )
+        else:
+            self._set_progress(mode, 1.0)
+            self._set_status(
+                mode,
+                f"Status: Done. {completed}/{total} file(s) converted to "
+                f"'{Path(self.output_dir.get()).name}'.",
+            )
+
+        self.cancel_requested = False
+        self.conversion_mode = None
 
     # Duration
     def _get_file_duration(self, input_path: str) -> Optional[float]:
-        # Uses ffprobe to get the duration of the input file in seconds.
+        """Use ffprobe to get media duration in seconds (None for images)."""
         try:
-            probe_cmd = [
-                FFMPEG_PATH.replace("ffmpeg", "ffprobe")
-                if "ffmpeg" in FFMPEG_PATH
-                else "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                input_path,
-            ]
-
             result = subprocess.run(
-                probe_cmd,
+                [
+                    FFPROBE_PATH,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    input_path,
+                ],
                 capture_output=True,
                 text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                timeout=15,
             )
-
             if result.returncode == 0 and result.stdout.strip():
                 return float(result.stdout.strip())
-            else:
-                # For images or files without duration, return None
-                return None
-
-        except (subprocess.SubprocessError, ValueError, FileNotFoundError):
-            # ffprobe not available or failed
-            return None
-
-    # Run FFmpeg
-    def _execute_ffmpeg(
-        self,
-        cmd: List[str],
-        mode: str,
-        output_format: str,
-        output_file: Path,
-        total_duration: Optional[float] = None,
-        file_index: int = 0,
-        total_files: int = 1,
-    ):
-        # Executes the FFmpeg command with real-time progress monitoring using non-blocking I/O.
-        # Calculate progress percentage for this file
-        file_start_pct = int((file_index / total_files) * 100)
-        file_target_pct = int(((file_index + 1) / total_files) * 100)
-
-        self.after(
-            0,
-            lambda: self.common_widgets[self.current_tab_name][
-                "help_text_label"
-            ].configure(
-                text=f"Status: Converting file {file_index + 1} of {total_files} ({file_start_pct}%)..."
-            ),
-        )
-
-        self.active_conversion_process = None
-
-        try:
-            process = subprocess.Popen(
-                cmd,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except OSError as e:
-            error_msg = str(e)
-            self.after(
-                0,
-                lambda: self.common_widgets[self.current_tab_name][
-                    "help_text_label"
-                ].configure(
-                    text=f"Status: ERROR! Failed to start FFmpeg process: {error_msg}"
-                ),
-            )
-            self.after(0, lambda: self._toggle_progress_bar(False))
-            self.active_conversion_process = None
-            return
-
-        self.active_conversion_process = process
-
-        try:
-            # Start progress monitoring in a separate executor task
-            progress_future = self.executor.submit(
-                self._monitor_conversion_progress, process.stderr, total_duration
-            )
-
-            # Wait for the process to complete
-            return_code = process.wait()
-            self.active_conversion_process = None
-
-            # Cancel progress monitoring if still running
-            if not progress_future.done():
-                progress_future.cancel()
-
-            self.after(0, lambda: self._toggle_progress_bar(False))
-
-            if return_code == 0:
-                # Increment completed files counter
-                self.converted_files_count += 1
-                completed_pct = int((self.converted_files_count / total_files) * 100)
-
-                # Update progress to milestone
-                self.after(
-                    0,
-                    lambda: self._update_progress_milestone(completed_pct)
-                )
-                self.after(
-                    0,
-                    lambda: self.common_widgets[self.current_tab_name][
-                        "help_text_label"
-                    ].configure(
-                        text=f"Status: Completed {self.converted_files_count} of {total_files} files ({completed_pct}%). Output: {output_file.name}"
-                    ),
-                )
-            else:
-                # Read any remaining stderr output for error details
-                remaining_stderr = process.stderr.read()
-                error_message = (
-                    remaining_stderr.decode("utf-8", errors="ignore")
-                    if remaining_stderr
-                    else f"Unknown error (code: {return_code})"
-                )
-
-                if return_code in (-15, 1):
-                    self.after(
-                        0,
-                        lambda: self.common_widgets[self.current_tab_name][
-                            "help_text_label"
-                        ].configure(text="Status: Conversion Cancelled by user."),
-                    )
-                else:
-                    short_error = error_message.replace("\n", " ").strip()
-                    display_error = (
-                        f"{short_error[:150]}..."
-                        if len(short_error) > 150
-                        else short_error
-                    )
-                    self.after(
-                        0,
-                        lambda: self.common_widgets[self.current_tab_name][
-                            "help_text_label"
-                        ].configure(text=f"Status: FFmpeg ERROR! {display_error}"),
-                    )
-
-        except Exception as e:
-            error_msg = str(e)
-            self.after(0, lambda: self._toggle_progress_bar(False))
-            self.after(
-                0,
-                lambda: self.common_widgets[self.current_tab_name][
-                    "help_text_label"
-                ].configure(text=f"Status: UNEXPECTED ERROR! {error_msg}"),
-            )
-            self.active_conversion_process = None
-
-    # Monitor
-    def _monitor_conversion_progress(
-        self, stderr_pipe, total_duration: Optional[float] = None
-    ):
-        # Dedicated method to monitor FFmpeg conversion progress output in real-time
-        import re
-
-        try:
-            while True:
-                line = stderr_pipe.readline()
-                if not line:  # EOF reached
-                    break
-
-                line_str = line.decode("utf-8", errors="ignore").strip()
-                if not line_str:
-                    continue
-
-                # Use regex to find and extract the current conversion time
-                time_match = re.search(r"time=(\d{2}:\d{2}:\d{2}\.\d{2})", line_str)
-                if time_match:
-                    time_str = time_match.group(1)
-                    print(f"Current conversion time: {time_str}")
-
-                # Also update UI with real-time progress information
-                self.after(
-                    0,
-                    lambda l=line_str, d=total_duration: self._update_progress_status(
-                        l, d
-                    ),
-                )
-
-        except Exception as e:
-            print(f"[PROGRESS MONITOR ERROR] {e}")
-
-    def _update_progress_100(self):
-        # Helper to force bar to full when done
-        if self.current_tab_name == "Video":
-            self.video_progress_bar.set(1.0)
-        elif self.current_tab_name == "Audio":
-            self.audio_progress_bar.set(1.0)
-        elif self.current_tab_name == "Image":
-            self.image_progress_bar.set(1.0)
-
-    def _update_progress_milestone(self, percentage: int):
-        # Helper to set progress bar to a specific milestone percentage (0-100)
-        progress = percentage / 100.0
-        if self.current_tab_name == "Video":
-            self.video_progress_bar.set(progress)
-        elif self.current_tab_name == "Audio":
-            self.audio_progress_bar.set(progress)
-        elif self.current_tab_name == "Image":
-            self.image_progress_bar.set(progress)
-
-    # Parse
-    def _parse_progress_line(
-        self, line: str, total_duration: Optional[float] = None
-    ) -> Optional[str]:
-        # Parse FFmpeg output line for progress information using regex
-        import re
-
-        # Look for time information (e.g., time=00:00:15.50)
-        time_match = re.search(r"time=(\d{2}:\d{2}:\d{2}\.\d{2})", line)
-        if time_match:
-            time_str = time_match.group(1)
-            if total_duration:
-                # Convert time to seconds and calculate percentage
-                h, m, s = time_str.split(":")
-                current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
-                percentage = min(current_seconds / total_duration, 1.0) * 100
-                return f"Time: {time_str} ({percentage:.1f}% complete)"
-            else:
-                return f"Time: {time_str}"
-
-        # Look for frame information (e.g., frame=1234)
-        frame_match = re.search(r"frame=\s*(\d+)", line)
-        if frame_match:
-            frame_num = frame_match.group(1)
-            return f"Frame: {frame_num}"
-
-        # Look for fps information
-        fps_match = re.search(r"fps=\s*([\d.]+)", line)
-        if fps_match:
-            fps = fps_match.group(1)
-            return f"FPS: {fps}"
-
-        # Look for bitrate information
-        bitrate_match = re.search(r"bitrate=\s*([^s]+)", line)
-        if bitrate_match:
-            bitrate = bitrate_match.group(1).strip()
-            return f"Bitrate: {bitrate}"
-
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
         return None
 
-    def _update_progress_status(
-        self, progress_line: str, total_duration: Optional[float] = None
-    ):
-        # Updates the UI with real-time FFmpeg progress information and progress bar.
-        # Parse basic progress info from FFmpeg output
-        if "time=" in progress_line and total_duration:
-            # Extract time information and calculate progress percentage
-            time_match = re.search(r"time=(\d{2}:\d{2}:\d{2}\.\d{2})", progress_line)
-            if time_match:
-                time_str = time_match.group(1)
-                # Convert HH:MM:SS.ms to seconds
-                h, m, s = time_str.split(":")
-                current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
-
-                # Calculate progress percentage
-                if total_duration > 0:
-                    progress_percentage = min(current_seconds / total_duration, 1.0)
-                    # Update progress bar
-                    current_tab = self.current_tab_name
-                    if current_tab == "Video":
-                        self.video_progress_bar.set(progress_percentage)
-                    elif current_tab == "Audio":
-                        self.audio_progress_bar.set(progress_percentage)
-                    elif current_tab == "Image":
-                        self.image_progress_bar.set(progress_percentage)
-
-                    # Update status text with percentage
-                    percent = int(progress_percentage * 100)
-                    self.common_widgets[self.current_tab_name][
-                        "help_text_label"
-                    ].configure(
-                        text=f"Status: Converting... {percent}% complete (Time: {time_str})"
-                    )
-                else:
-                    self.common_widgets[self.current_tab_name][
-                        "help_text_label"
-                    ].configure(text=f"Status: Converting... Current time: {time_str}")
-        elif progress_line.startswith("frame=") or "fps=" in progress_line:
-            # Show general progress line when duration is not available
-            if not total_duration:
-                short_progress = (
-                    progress_line[:100] + "..."
-                    if len(progress_line) > 100
-                    else progress_line
-                )
-                self.common_widgets[self.current_tab_name]["help_text_label"].configure(
-                    text=f"Status: {short_progress}"
-                )
-
-    # Button State
-    def _update_convert_button_state(
-        self, is_converting: bool, convert_btn: ctk.CTkButton, mode: str
-    ):
-        # Changes the button text, color, and command between CONVERT and CANCEL.
-        if is_converting:
-            convert_btn.configure(
-                text="CANCEL",
-                command=self._cancel_conversion,
-                fg_color=APP_CONFIG["THEME_COLORS"]["btn_cancel"],
-                hover_color=APP_CONFIG["THEME_COLORS"]["btn_cancel_hover"],
-                state="normal",
+    # Run FFmpeg
+    def _run_ffmpeg(
+        self,
+        job: dict,
+        file_index: int,
+        total_files: int,
+        total_duration: Optional[float],
+        mode: str,
+    ) -> Tuple[int, str]:
+        """Run one conversion, reading progress until the process exits."""
+        try:
+            process = subprocess.Popen(
+                job["cmd"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
-        else:
-            convert_btn.configure(
-                text="CONVERT",
-                command=lambda: self._start_conversion(mode),
-                fg_color=APP_CONFIG["THEME_COLORS"]["btn_green"],
-                hover_color=APP_CONFIG["THEME_COLORS"]["btn_green_hover"],
-                state="normal",
-            )
+        except OSError as exc:
+            return 1, str(exc)
 
-    # Progress Bar
-    def _toggle_progress_bar(self, start: bool):
-        # Starts/stops the progress bar animation and updates the CONVERT/CANCEL button.
-        current_tab = self.current_tab_name
-        progress_bar = None
-        convert_btn = None
+        self.active_conversion_process = process
+        tail = deque(maxlen=50)
+        last_ui_update = 0.0
 
-        if current_tab == "Video":
-            progress_bar = self.video_progress_bar
-            convert_btn = self.video_convert_btn
-        elif current_tab == "Audio":
-            progress_bar = self.audio_progress_bar
-            convert_btn = self.audio_convert_btn
-        elif current_tab == "Image":
-            progress_bar = self.image_progress_bar
-            convert_btn = self.image_convert_btn
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    tail.append(line.rstrip())
+                    info = parse_ffmpeg_progress(line)
+                    if (
+                        "seconds" in info
+                        and total_duration
+                        and total_duration > 0
+                    ):
+                        file_fraction = min(
+                            info["seconds"] / total_duration, 1.0
+                        )
+                        overall = (file_index + file_fraction) / max(
+                            total_files, 1
+                        )
+                        now = time.monotonic()
+                        if now - last_ui_update >= 0.15:
+                            last_ui_update = now
+                            self._post(
+                                lambda value=overall: self._set_progress(
+                                    mode, value
+                                )
+                            )
+                    if self.cancel_requested and process.poll() is None:
+                        try:
+                            process.terminate()
+                        except OSError:
+                            pass
 
-        if progress_bar and convert_btn:
-            if start:
-                self.conversion_counter += 1
-                if self.conversion_counter == 1:
-                    progress_bar.start()
-                    progress_bar.set(0.2)
-                    self._update_convert_button_state(True, convert_btn, current_tab)
-            else:
-                self.conversion_counter -= 1
-                if self.conversion_counter == 0:
-                    progress_bar.stop()
-                    progress_bar.set(0)
-                    self._update_convert_button_state(False, convert_btn, current_tab)
+            return_code = process.wait()
+        except Exception as exc:
+            tail.append(str(exc))
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                return_code = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                return_code = -1
+        finally:
+            self.active_conversion_process = None
+
+        return return_code, "\n".join(tail)
 
     # Bind Help
     def _bind_help_text_for_tab(self, tab_name: str):
@@ -3818,7 +4026,7 @@ class FFConverterApp(CTkDnD):
             try:
                 widget.unbind("<Enter>")
                 widget.unbind("<Leave>")
-            except:
+            except Exception:
                 pass
             widget.bind("<Enter>", lambda _: set_help_text(tab_key, key))
             widget.bind("<Leave>", lambda _: set_help_text(tab_key, "default"))
@@ -3951,6 +4159,8 @@ class FFConverterApp(CTkDnD):
         """
         if not TKINTERDND_AVAILABLE:
             return
+        if not getattr(self, "dnd_ready", False):
+            return
 
         for tab_name in ["Audio", "Video", "Image"]:
             # Use the main tab frame as the drop target
@@ -3992,63 +4202,52 @@ class FFConverterApp(CTkDnD):
         widget.configure(border_color="transparent", border_width=0)
 
     def _handle_drop(self, event, tab_name: str):
-        """
-        Handles the '<<Drop>>' event.
-        Parses files, validates, and updates the path variable.
-        """
-        dropped_data = event.data
+        """Handle a drop, updating both the visible label and the real file list."""
+        try:
+            # TkinterDnD gives us a Tcl list; splitlist handles spaces and
+            # braces correctly (the old regex did not handle every case).
+            file_paths = list(self.tk.splitlist(event.data))
+        except Exception:
+            file_paths = [event.data]
 
-        # Robustly handle paths, which can be space-separated or enclosed in {}.
-        # This regex split is more robust than simple split() for files with spaces in their names.
-        if dropped_data.startswith("{") and dropped_data.endswith("}"):
-            # This is common for single files with spaces or complex paths
-            file_paths = [dropped_data.strip("{}")]
-        else:
-            # Handle multiple files or simple paths without spaces
-            # Use re.findall to handle space separation, possibly enclosed by braces (common TkinterDnD format)
-            file_paths = [
-                path.strip().strip("{}")
-                for path in re.findall(r"\{[^}]+\}|\S+", dropped_data)
-            ]
+        file_paths = [
+            str(Path(path).expanduser())
+            for path in file_paths
+            if str(path).strip() and Path(path).expanduser().is_file()
+        ]
 
-        file_paths = [p for p in file_paths if p]  # Filter out empty strings
-
-        # 1. Validate files
-        valid_files, rejected_files = self._validate_files(file_paths, tab_name)
-
-        if not valid_files:
-            # Update status if no files were valid
-            if file_paths and rejected_files:
-                self._update_status(
-                    tab_name,
-                    f"Status: Dropped file(s) rejected. Only {self.tab_variables[tab_name]['extensions']} supported.",
-                    is_error=True,
-                )
-            else:
-                self._update_status(
-                    tab_name, "Status: No valid files were dropped.", is_error=True
-                )
+        if not file_paths:
+            self._set_status(
+                tab_name, "Status: No files were dropped.", is_error=True
+            )
             return
 
-        # 2. Set files into the appropriate variable
-        file_path_str = "; ".join(valid_files)
-        input_var = self.tab_variables[tab_name]["input"]
-        input_var.set(file_path_str)
+        valid_files, rejected_files = self._validate_files(file_paths, tab_name)
+        if not valid_files:
+            self._set_status(
+                tab_name,
+                f"Status: Dropped file(s) rejected. Only "
+                f"{self.tab_variables[tab_name]['extensions']} are supported here.",
+                is_error=True,
+            )
+            return
 
-        # 3. Update status with success message
-        status_msg = f"Status: {len(valid_files)} file(s) dropped successfully. Ready for conversion."
+        status_msg = (
+            f"Status: {len(valid_files)} file(s) dropped successfully. "
+            "Ready for conversion."
+        )
         if rejected_files:
-            # Inform user about rejected files
-            status_msg += f" ({len(rejected_files)} file(s) rejected due to format.)"
+            status_msg += (
+                f" {len(rejected_files)} file(s) rejected due to format."
+            )
 
-        self._update_status(tab_name, status_msg)
+        self.last_input_dir = str(Path(valid_files[0]).parent)
+        # This is the important part the old code missed: update the stored
+        # path list used by the conversion worker, not only the label.
+        self._set_selected_files(tab_name, valid_files, status_msg)
 
     def _update_status(self, tab_name: str, message: str, is_error: bool = False):
-        """
-        Updates the status label for the given tab.
-        """
-        if "help_text_label" in self.common_widgets.get(tab_name, {}):
-            self.common_widgets[tab_name]["help_text_label"].configure(text=message)
+        self._set_status(tab_name, message, is_error)
 
     # Bind Video
     def _bind_video_dynamic_options(self, *args):
@@ -4058,7 +4257,7 @@ class FFConverterApp(CTkDnD):
             try:
                 widget.unbind("<Enter>")
                 widget.unbind("<Leave>")
-            except:
+            except Exception:
                 pass
 
         def bind_widget(widget, key):
@@ -4084,7 +4283,7 @@ class FFConverterApp(CTkDnD):
             try:
                 widget.unbind("<Enter>")
                 widget.unbind("<Leave>")
-            except:
+            except Exception:
                 pass
 
         def bind_widget(widget, key):
@@ -4189,153 +4388,171 @@ class FFConverterApp(CTkDnD):
 
     # Exit
     def _on_closing(self):
-        # Safely terminates any active FFmpeg conversion process before closing the application.
-        if (
-            self.active_conversion_process
-            and self.active_conversion_process.poll() is None
-        ):
-            try:
-                self.active_conversion_process.kill()
-                self.active_conversion_process = None
-            except Exception:
-                pass
+        """Stop background work and close the application."""
+        if self.conversion_running:
+            if not messagebox.askyesno(
+                "Quit FFConverter",
+                "A conversion is still running. Stop it and quit?",
+            ):
+                return
+            self.cancel_requested = True
+            self._force_kill(self.active_conversion_process)
 
-        # Shutdown the ThreadPoolExecutor
-        if hasattr(self, "executor"):
-            self.executor.shutdown(wait=False)
-
-        # Destroy the root window to close the application
-        self.winfo_toplevel().destroy()
+        self._stop_tray()
+        self.destroy()
 
     def _setup_tray_icon(self):
-        """Setup system tray icon using subprocess to avoid signal issues."""
+        """Start an optional tray icon in a separate process.
+
+        pystray uses its own GLib/GTK main loop, which conflicts with Tk on
+        some desktops. Keeping it in a child process avoids those crashes.
+        """
+        if not PYSTRAY_AVAILABLE:
+            return
+
+        icon_path = None
+        for path in (
+            CURRENT_DIR / "ffconverter.png",
+            CURRENT_DIR / "resources" / "images" / "LOGO_256.png",
+            Path("/usr/share/ffconverter/ffconverter.png"),
+            Path("/usr/share/icons/hicolor/256x256/apps/ffconverter.png"),
+        ):
+            if path.is_file():
+                icon_path = str(path)
+                break
+
+        if not icon_path:
+            return
+
         try:
-            import subprocess
-            import os
-            import sys
-            import threading
-            
-            # Find icon - check multiple locations
-            possible_paths = [
-                "/usr/share/ffconverter/ffconverter.png",
-                "/usr/share/icons/hicolor/256x256/apps/ffconverter.png",
-                str(CURRENT_DIR / "ffconverter.png"),
-                str(CURRENT_DIR / "resources" / "images" / "LOGO_256.png"),
-            ]
-            
-            icon_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    icon_path = path
-                    break
-            
-            if not icon_path:
-                print("Warning: Could not find icon file for tray")
-                return
-            
-            # Create a separate script for tray icon
-            tray_script = f'''#!/usr/bin/env python3
-import sys
+            tray_dir = Path(tempfile.mkdtemp(prefix="ffconverter-tray-"))
+            script_path = tray_dir / "tray.py"
+            script_path.write_text(
+                """#!/usr/bin/env python3
 import os
 from PIL import Image
 import pystray
-import threading
+
+signal_dir = os.environ["FFCONVERTER_TRAY_DIR"]
+icon_path = os.environ["FFCONVERTER_ICON"]
+
+def signal(name):
+    try:
+        with open(os.path.join(signal_dir, name), "w", encoding="utf-8") as fh:
+            fh.write("1")
+    except OSError:
+        pass
 
 def show_window(icon, item):
-    # Signal parent to show window
-    with open("/tmp/ffconverter_tray_show", "w") as f:
-        f.write("1")
+    signal("show")
 
 def quit_app(icon, item):
-    # Signal parent to quit
-    with open("/tmp/ffconverter_tray_quit", "w") as f:
-        f.write("1")
+    signal("quit")
     icon.stop()
 
-icon_path = "{icon_path}"
-icon_image = Image.open(icon_path)
-icon_image = icon_image.resize((64, 64), Image.LANCZOS)
-
+image = Image.open(icon_path).resize((64, 64), Image.LANCZOS)
 menu = pystray.Menu(
     pystray.MenuItem("Show", show_window, default=True),
-    pystray.MenuItem("Quit", quit_app)
+    pystray.MenuItem("Quit", quit_app),
 )
+pystray.Icon("FFConverter", image, "FFConverter", menu).run()
+""",
+                encoding="utf-8",
+            )
 
-tray = pystray.Icon("FFConverter", icon_image, "FFConverter", menu)
-tray.run()
-'''
-            
-            # Write tray script to temp file
-            script_path = "/tmp/ffconverter_tray.py"
-            with open(script_path, "w") as f:
-                f.write(tray_script)
-            
-            # Start tray in subprocess
+            env = os.environ.copy()
+            env["FFCONVERTER_TRAY_DIR"] = str(tray_dir)
+            env["FFCONVERTER_ICON"] = icon_path
+
+            self.tray_dir = tray_dir
+            self.tray_stop = threading.Event()
             self.tray_process = subprocess.Popen(
-                [sys.executable, script_path],
+                [sys.executable, str(script_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True
+                env=env,
+                start_new_session=True,
             )
-            
-            # Start monitoring thread
-            self.tray_monitor_thread = threading.Thread(target=self._monitor_tray, daemon=True)
+            self.tray_monitor_thread = threading.Thread(
+                target=self._monitor_tray, daemon=True
+            )
             self.tray_monitor_thread.start()
-            
-            print("System tray icon initialized (subprocess)")
-        except Exception as e:
-            print(f"Warning: Failed to setup tray icon: {e}")
+        except Exception as exc:
+            print(f"Warning: system tray unavailable: {exc}")
+            self._stop_tray()
 
     def _monitor_tray(self):
-        """Monitor tray icon for show/quit signals."""
-        import time
-        import os
-        
-        while True:
-            time.sleep(0.5)
-            if os.path.exists("/tmp/ffconverter_tray_show"):
-                os.remove("/tmp/ffconverter_tray_show")
-                self.after(0, self.deiconify)
-                self.after(0, self.lift)
-            if os.path.exists("/tmp/ffconverter_tray_quit"):
-                os.remove("/tmp/ffconverter_tray_quit")
-                self._quit_from_tray()
-                break
+        """Watch the tray child process for Show/Quit requests."""
+        assert self.tray_dir is not None
+        while not self.tray_stop.wait(0.4):
+            if (self.tray_dir / "show").exists():
+                try:
+                    (self.tray_dir / "show").unlink()
+                except OSError:
+                    pass
+                self._post(self._show_from_tray)
+            if (self.tray_dir / "quit").exists():
+                try:
+                    (self.tray_dir / "quit").unlink()
+                except OSError:
+                    pass
+                self._post(self._on_closing)
+                return
 
-    def _show_from_tray(self, icon=None, item=None):
-        """Show the main window from tray."""
-        self.after(0, self.deiconify)
-        self.after(0, self.lift)
-        # Stop the tray icon when showing
-        if hasattr(self, 'tray_icon'):
+    def _show_from_tray(self):
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _stop_tray(self):
+        if getattr(self, "tray_stop", None) is not None:
+            self.tray_stop.set()
+        process = getattr(self, "tray_process", None)
+        if process is not None and process.poll() is None:
             try:
-                self.tray_icon.stop()
-            except Exception:
-                pass
+                process.terminate()
+                process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+        self.tray_process = None
 
-    def _quit_from_tray(self, icon=None, item=None):
-        """Quit the application from tray."""
-        if hasattr(self, 'tray_icon'):
-            try:
-                self.tray_icon.stop()
-            except Exception:
-                pass
-        self._on_closing()
+        tray_dir = getattr(self, "tray_dir", None)
+        if tray_dir is not None:
+            shutil.rmtree(tray_dir, ignore_errors=True)
+            self.tray_dir = None
 
-    def _on_closing(self):
-        """Handle window close - minimize to tray instead of quitting."""
-        if hasattr(self, 'tray_icon'):
-            self.withdraw()  # Hide the window instead of closing
-        else:
-            # Fallback to original behavior if tray not available
-            self._cleanup_and_exit()
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="FFConverter",
+        description="Simple video, audio, and image converter for Linux.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"FFConverter {__version__}",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="files to open (also used by the desktop launcher)",
+    )
+    args = parser.parse_args(argv)
+
+    app = FFConverterApp()
+    app.protocol("WM_DELETE_WINDOW", app._on_closing)
+    if args.files:
+        # Wait until the first idle cycle so lazy-loaded tabs exist.
+        app.after(100, lambda: app.load_files_from_args(args.files))
+    app.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    # Creates the main window and starts the event loop.
-    app = FFConverterApp()
-
-    # Bind the cleanup method to the window closing protocol
-    app.protocol("WM_DELETE_WINDOW", app._on_closing)
-
-    app.mainloop()
+    raise SystemExit(main())

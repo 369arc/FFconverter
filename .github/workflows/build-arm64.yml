@@ -1,14 +1,12 @@
-name: Build ARM64
+name: Build ARM64 portable package
 
 on:
   workflow_dispatch:
-    inputs:
-      upload_url:
-        description: 'Release upload URL (optional for manual runs)'
-        required: false
-        default: ''
   release:
     types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   build-arm64:
@@ -16,45 +14,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y ffmpeg python3 python3-pip python3-venv
-          pip3 install customtkinter darkdetect pillow send2trash
+      - name: Check Python
+        run: python3 --version
 
-      - name: Build Portable
+      - name: Build portable tarball
         run: |
-          mkdir -p FFConverter-portable-arm64/usr/bin
-          mkdir -p FFConverter-portable-arm64/usr/share/applications
-          mkdir -p FFConverter-portable-arm64/usr/share/icons/hicolor/256x256/apps
-          
-          cp ffc.py FFConverter-portable-arm64/
-          cp run.sh FFConverter-portable-arm64/
-          
-          chmod +x FFConverter-portable-arm64/run.sh
-          
-          cp run.sh FFConverter-portable-arm64/usr/bin/FFConverter
-          cp ffc.py FFConverter-portable-arm64/usr/bin/
-          
-          cp usr/share/applications/ffconverter.desktop FFConverter-portable-arm64/usr/share/applications/
-          cp usr/share/icons/hicolor/256x256/ffconverter.png FFConverter-portable-arm64/usr/share/icons/hicolor/256x256/apps/
-          
-          cd FFConverter-portable-arm64
-          tar -cJf ../FFConverter-portable-arm64.tar.xz .
-          cd ..
-
-      - name: Upload as release artifact
-        uses: actions/upload-release-asset@v1
-        if: github.event.inputs.upload_url != '' || github.event_name == 'release'
-        with:
-          upload_url: ${{ github.event.inputs.upload_url || github.event.release.upload_url }}
-          asset_path: FFConverter-portable-arm64.tar.xz
-          asset_name: FFConverter-portable-arm64.tar.xz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          chmod +x packaging/build-portable.sh
+          ./packaging/build-portable.sh --arch arm64
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: FFConverter-portable-arm64
-          path: FFConverter-portable-arm64.tar.xz
+          path: dist/FFConverter-portable-arm64.tar.xz
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/FFConverter-portable-arm64.tar.xz
+            dist/FFConverter-portable-arm64.tar.xz.sha256

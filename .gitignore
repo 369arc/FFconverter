@@ -1,6 +1,19 @@
 # Python junk
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Build and release artifacts
+build/
+dist/
+*.deb
+*.rpm
+*.AppImage
+*.flatpak
+*.tar.xz
+*.tar.gz
+*.sha256
+SHA256SUMS
 
 # Bundled FFmpeg (in release only)
 usr/bin/
