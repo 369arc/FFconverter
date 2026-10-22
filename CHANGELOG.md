@@ -16,8 +16,10 @@
   package names, descriptions, dependencies, and licenses.
 - Added missing `libXcursor` dependency and graceful fallback when the
   drag-and-drop Tk extension cannot load.
-- Updated the Flatpak manifest to runtime 25.08 and removed unnecessary
-  network access.
+- Updated the Flatpak manifest to runtime 25.08, bundled Tcl/Tk for tkinter,
+  and removed unnecessary network access.
+- Added a self-contained AppImage (PyInstaller, Python/Tk bundled) and a
+  Flatpak bundle.
 - Removed committed build artifacts and unused Pillow wheels from the working
   tree (history still contains them; see `AUDIT.md`).
 
@@ -49,7 +51,8 @@
 - Added 22 unit tests for argument building, format validation, output naming,
   and progress parsing.
 - Verified the built DEB on Ubuntu 24.04 (Python 3.12), the RPM on Fedora 44
-  (Python 3.14), and the portable archive on Fedora 44.
+  (Python 3.14), the portable archive on Fedora 44, the AppImage on Ubuntu
+  22.04/Fedora 44, and the Flatpak with a real conversion.
 
 ## 1.0 — 2026-05-03
 

@@ -32,3 +32,11 @@ projects:
 | tkinterdnd2 | MIT (TkDND is Tcl/Tk licensed) |
 
 Their license files are included in the wheels (`*.dist-info/licenses/`).
+
+## Python, Tcl/Tk and AppImage/Flatpak runtimes
+
+The AppImage bundles a Python interpreter (PSF License), Tcl/Tk (BSD-style
+licenses) and the PyInstaller bootloader (GPL-2.0-or-later with the
+PyInstaller exception). The Flatpak builds Tcl/Tk 8.6 from source and runs on
+the Freedesktop Platform runtime. Their license texts are included in the
+respective upstream source archives and Flatpak runtime.

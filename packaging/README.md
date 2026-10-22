@@ -14,6 +14,8 @@ release). They have been replaced by reproducible scripts:
 | `build-deb.sh` | `dist/ffconverter_<version>_all.deb` |
 | `build-rpm.sh` | `dist/FFConverter-<version>-1.noarch.rpm` |
 | `build-portable.sh` | `dist/FFConverter-portable-<arch>.tar.xz` |
+| `build-appimage.sh` | `dist/FFConverter-<version>-x86_64.AppImage` (Ubuntu 22.04 container) |
+| `build-flatpak.sh` | `dist/FFConverter-<version>-x86_64.flatpak` |
 
 All scripts use the wheels in `../pip-wheels/`, never run `pip` as root, and
 never need network access. `build-portable.sh --with-ffmpeg DIR` can embed
@@ -34,6 +36,9 @@ python3 -m unittest discover -s tests -v
 dpkg-deb -c dist/ffconverter_1.1.0_all.deb
 ./packaging/build-rpm.sh
 rpm -qlp dist/FFConverter-1.1.0-1.noarch.rpm
+./packaging/build-appimage.sh
+./dist/FFConverter-1.1.0-x86_64.AppImage --appimage-extract-and-run --version
+./packaging/build-flatpak.sh
 ```
 
 The release workflow in `.github/workflows/ci.yml` builds the packages on

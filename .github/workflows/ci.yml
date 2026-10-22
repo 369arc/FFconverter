@@ -74,9 +74,22 @@ jobs:
           name: portable-x86_64
           path: dist/FFConverter-portable-x86_64.tar.xz
 
+  appimage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AppImage in Ubuntu 22.04
+        run: |
+          chmod +x packaging/*.sh
+          CONTAINER_ENGINE=docker ./packaging/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage-x86_64
+          path: dist/FFConverter-*-x86_64.AppImage
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, deb, rpm, portable]
+    needs: [test, deb, rpm, portable, appimage]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -6,8 +6,7 @@ command: ffconverter-launcher
 
 finish-args:
   - --share=ipc
-  - --socket=fallback-x11
-  - --socket=wayland
+  - --socket=x11
   - --socket=pulseaudio
   - --device=dri
   - --filesystem=home
@@ -20,6 +19,35 @@ add-extensions:
     autodownload: true
 
 modules:
+  - name: tcl
+    buildsystem: simple
+    build-commands:
+      - cd unix && ./configure --prefix=/app --enable-threads --enable-shared && make -j"$(nproc)" && make install && chmod -R u+w /app/bin /app/lib /app/include
+    sources:
+      - type: archive
+        url: https://prdownloads.sourceforge.net/tcl/tcl8.6.15-src.tar.gz
+        sha256: 861e159753f2e2fbd6ec1484103715b0be56be3357522b858d3cbb5f893ffef1
+
+  - name: tk
+    buildsystem: simple
+    build-commands:
+      - cd unix && ./configure --prefix=/app --with-tcl=/app/lib --enable-threads --enable-shared --with-x && make -j"$(nproc)" && make install && chmod -R u+w /app/bin /app/lib /app/include
+    sources:
+      - type: archive
+        url: https://prdownloads.sourceforge.net/tcl/tk8.6.15-src.tar.gz
+        sha256: 550969f35379f952b3020f3ab7b9dd5bfd11c1ef7c9b7c6a75f5c49aca793fec
+
+  - name: python-tkinter
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/python3.13/site-packages
+      - gcc -shared -fPIC $(python3-config --includes) -I/app/include -I/usr/include/python3.13/internal -Wl,-rpath,/app/lib -o /app/lib/python3.13/site-packages/_tkinter$(python3-config --extension-suffix) Modules/_tkinter.c -L/app/lib -ltk8.6 -ltcl8.6 -lX11 -lpthread -ldl -lutil -lm
+      - cp -r Lib/tkinter /app/lib/python3.13/site-packages/
+    sources:
+      - type: archive
+        url: https://www.python.org/ftp/python/3.13.14/Python-3.13.14.tgz
+        sha256: 5ae535a36af0ebca6fca176ecb8197f5db9c1cb8c8f0cd12cdf1787046db1f41
+
   - name: python-deps
     buildsystem: simple
     build-commands:
@@ -41,7 +69,8 @@ modules:
     build-commands:
       - mkdir -p /app/bin /app/share/ffconverter /app/share/applications /app/share/icons/hicolor/256x256/apps /app/share/licenses/com.ffconverter.FFConverter
       - cp ffc.py /app/share/ffconverter/
-      - cp -r resources /app/share/ffconverter/
+      - mkdir -p /app/share/ffconverter/resources
+      - cp -r icon.ico images /app/share/ffconverter/resources/
       - cp ffconverter-launcher /app/bin/
       - cp com.ffconverter.FFConverter.desktop /app/share/applications/
       - cp com.ffconverter.FFConverter.png /app/share/icons/hicolor/256x256/apps/

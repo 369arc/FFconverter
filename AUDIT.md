@@ -47,7 +47,7 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 | P0-3 | P0 | DEB/RPM install no `FFConverter` command; desktop entry uses a PATH-dependent `run.sh`. | Fixed |
 | P0-4 | P0 | `run.sh` does not install/check `customtkinter`; portable build fails with `ModuleNotFoundError`. | Fixed (vendored deps + offline fallback) |
 | P0-5 | P0 | ARM64 archive has no dependencies/FFmpeg and the README extraction path is wrong. | Fixed |
-| P0-6 | P0 | AppImage is not self-contained (system Python, dynamic FFmpeg, 3.14-only packages). | Deprecated; see open items |
+| P0-6 | P0 | AppImage is not self-contained (system Python, dynamic FFmpeg, 3.14-only packages). | Fixed (PyInstaller AppImage, Ubuntu 22.04 build) |
 | P0-7 | P0 | Duplicate `_on_closing` calls non-existent `_cleanup_and_exit`; close button raises and app cannot quit cleanly. | Fixed |
 | P0-8 | P0 | Batch conversion submits all files to a 2-worker pool with a single global FFmpeg process; cancel kills one process and leaves others running; output names collide and overwrite. | Fixed (sequential worker, unique names) |
 | P0-9 | P0 | Drag and drop updates only the label, not `selected_*_files`, so Convert says “select a file”. | Fixed |
@@ -67,9 +67,9 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 | P1-14 | P1 | Cancel leaves partial output files. | Fixed |
 | P1-15 | P1 | `-vf`/`-r` are silently ignored in copy mode (the old `cmd[-1] != "copy"` check is unreliable). | Fixed (explicit error) |
 | P1-16 | P1 | `debian/postinst` runs `pip3 install --break-system-packages` as root; failures are hidden by `|| true`; `prerm` only removes one launcher. | Removed (new packaging) |
-| P1-17 | P1 | Flatpak manifest says runtime 23.08 while the published bundle uses 25.08; `--share=network` is unnecessary; ffmpeg extension is not auto-downloaded. | Fixed (manifest; not rebuilt) |
+| P1-17 | P1 | Flatpak manifest says runtime 23.08 while the published bundle uses 25.08; `--share=network` is unnecessary; ffmpeg extension is not auto-downloaded; runtime Python lacks tkinter. | Fixed (Tcl/Tk modules, 25.08, rebuilt) |
 | P1-18 | P1 | Bundled FFmpeg is described as LGPL, but the v1.0 static/AppImage builds enable GPL. | Fixed in notices |
-| P1-19 | P1 | No checksums, signatures, or CI for DEB/RPM/portable; only an ARM workflow using the deprecated `upload-release-asset@v1`. | Fixed (scripts + CI) |
+| P1-19 | P1 | No checksums, signatures, or CI for DEB/RPM/portable/AppImage/Flatpak; only an ARM workflow using the deprecated `upload-release-asset@v1`. | Fixed (scripts + CI) |
 | P2-1 | P2 | No CLI file arguments, so desktop `%F`/“Open with” did nothing. | Fixed |
 | P2-2 | P2 | Output extensions were uppercase (`clip.MP4`), surprising on Linux. | Fixed |
 | P2-3 | P2 | Tray script in predictable `/tmp/ffconverter_tray.py`, shared sentinel files, never cleaned; tray process not stopped on exit. | Fixed (private temp dir, cleanup) |
@@ -102,10 +102,14 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 - `packaging/build-portable.sh` builds x86_64/ARM64 archives with `vendor/`.
 - `packaging/install.sh` installs into `~/.local` or a custom prefix without
   root, pip, or network.
+- `packaging/build-appimage.sh` builds a PyInstaller AppImage on Ubuntu 22.04,
+  bundling Python/Tk and using the system FFmpeg.
+- `packaging/build-flatpak.sh` builds a Flatpak bundle with Tcl/Tk modules; the
+  manifest uses runtime 25.08 and only X11 (Tk has no native Wayland backend).
 - `run.sh` checks Python/Tk, uses `vendor/`, offers an offline wheel-based
   venv fallback, and no longer aborts before `--version` when FFmpeg is
   missing.
-- CI workflows build/test DEB, RPM, and portable artifacts.
+- CI workflows build/test DEB, RPM, portable, and AppImage artifacts.
 
 ### Application
 
@@ -129,37 +133,34 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 - Integration tests: 2-file batch with colliding stems produced
   `a_converted.mp4` and `a_converted_1.mp4`; MP3/JPG conversions; cancel
   during an 8K conversion stopped FFmpeg and removed the partial file.
+- AppImage (Ubuntu 22.04/Fedora 44) and Flatpak (runtime 25.08) launched; the
+  Flatpak performed a real MP4 → MKV conversion.
 - Format matrix against Fedora FFmpeg 8: all video outputs except the
   deliberately removed DV/GXF now succeed; all audio outputs succeed; all
   image outputs succeed (ICO now scales to 256).
 
 ## Open items / recommendations
 
-1. **Rebuild the release assets.** The source is fixed, but the v1.0 artifacts
-   on GitHub are still the broken ones. Publish v1.1.0 from the new CI and
-   delete/replace the v1.0 DEB/RPM/AppImage/ARM assets.
-2. **AppImage.** The current AppImage is fundamentally not portable. Build a
-   real one with PyInstaller/python-appimage in an old-glibc container, or
-   keep it deprecated. Do not advertise it until tested on Ubuntu 22.04.
-3. **Flatpak.** The manifest is updated but was not rebuilt locally (the
-   25.08 SDK is not installed). Build it in CI, verify `/app/bin/ffmpeg`, and
-   test conversion.
-4. **Repository history.** Deleting the 96 MB Flatpak and 68 MB of wheels from
+1. **Old v1.0 assets.** The v1.0 release is now marked deprecated, but its
+   broken assets are still downloadable. Delete them if repository owners do
+   not want to keep them for history.
+2. **Repository history.** Deleting the 96 MB Flatpak and 68 MB of wheels from
    the working tree does not shrink existing clones. If repository size
    matters, rewrite history with `git filter-repo` and force-push — a
    destructive operation that needs owner approval.
-5. **Old `debian/` and root spec.** Removed because they were not the files
+3. **Old `debian/` and root spec.** Removed because they were not the files
    used for the release and could not build from a clean checkout. Standard
    `dpkg-buildpackage` packaging can be added later on top of
    `packaging/build-deb.sh`.
-6. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
+4. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
    Wayland, KDE, and a HiDPI display before release.
-7. **Translations/settings persistence** are not part of this audit.
+5. **Translations/settings persistence** are not part of this audit.
 
 ## Notes on the audit environment
 
 - Host: Fedora 44, Python 3.14.8, FFmpeg 8.0.1, no passwordless sudo.
 - DEB/RPM installs were performed in rootless Podman containers.
-- The v1.0 Flatpak bundle was installed with `flatpak install --user` and
-  launched; its `/app/bin/ffmpeg` and Python 3.13 + CustomTkinter were
-  verified. The source manifest was updated but not rebuilt.
+- The Flatpak was rebuilt from the updated manifest (runtime 25.08, Tcl/Tk
+  modules), installed, and verified with Python imports and a real MP4 → MKV
+  conversion. The AppImage was built on Ubuntu 22.04 and launched there and on
+  Fedora 44.

@@ -88,25 +88,36 @@ or any network request.
 
 ### Flatpak
 
-A Flatpak bundle can be built from the included manifest:
+The release includes a Flatpak bundle. It requires the
+`org.freedesktop.Platform` 25.08 runtime from Flathub:
+
+```bash
+curl -LO https://github.com/369arc/FFconverter/releases/latest/download/FFConverter-1.1.0-x86_64.flatpak
+flatpak install --user ./FFConverter-1.1.0-x86_64.flatpak
+flatpak run com.ffconverter.FFConverter
+```
+
+To build it from source:
 
 ```bash
 flatpak-builder --user --install --force-clean build-dir com.ffconverter.FFConverter.yml
 flatpak run com.ffconverter.FFConverter
 ```
 
-If you already have a `FFConverter.flatpak` bundle:
-
-```bash
-flatpak install --user ./FFConverter.flatpak
-flatpak run com.ffconverter.FFConverter
-```
-
 ### AppImage
 
-The AppImage published with v1.0 was built against a single Python version and
-did not actually bundle Python; it is deprecated. Use the portable archive
-until a reproducible AppImage build is published.
+The AppImage is self-contained: it bundles Python, Tk and the Python GUI
+dependencies. It uses the system FFmpeg for conversions and needs glibc 2.35+
+(Ubuntu 22.04 or newer).
+
+```bash
+curl -LO https://github.com/369arc/FFconverter/releases/latest/download/FFConverter-1.1.0-x86_64.AppImage
+chmod +x FFConverter-1.1.0-x86_64.AppImage
+./FFConverter-1.1.0-x86_64.AppImage
+```
+
+If FUSE is unavailable, run it with
+`./FFConverter-1.1.0-x86_64.AppImage --appimage-extract-and-run`.
 
 ## Build from source
 
@@ -117,6 +128,8 @@ python3 -m unittest discover -s tests -v
 ./packaging/build-deb.sh       # dist/ffconverter_<version>_all.deb
 ./packaging/build-rpm.sh       # dist/FFConverter-<version>-1.noarch.rpm
 ./packaging/build-portable.sh  # dist/FFConverter-portable-x86_64.tar.xz
+./packaging/build-appimage.sh  # dist/FFConverter-<version>-x86_64.AppImage
+./packaging/build-flatpak.sh   # dist/FFConverter-<version>-x86_64.flatpak
 ```
 
 To include FFmpeg in a portable archive, pass a directory containing
