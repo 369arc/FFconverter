@@ -16,9 +16,11 @@ release). They have been replaced by reproducible scripts:
 | `build-portable.sh` | `dist/FFConverter-portable-<arch>.tar.xz` |
 | `build-appimage.sh` | `dist/FFConverter-<version>-x86_64.AppImage` (Ubuntu 22.04 container) |
 | `build-flatpak.sh` | `dist/FFConverter-<version>-x86_64.flatpak` |
+| `build-windows.ps1` | `dist/FFConverter-<version>-windows-x86_64.zip` and `.exe` |
 
 All scripts use the wheels in `../pip-wheels/`, never run `pip` as root, and
-never need network access. `build-portable.sh --with-ffmpeg DIR` can embed
+never need network access. The Windows script downloads BtbN FFmpeg GPL
+builds unless `-FfmpegDir` is supplied. `build-portable.sh --with-ffmpeg DIR` can embed
 self-contained `ffmpeg`/`ffprobe` binaries.
 
 Flatpak builds use the manifest in the repository root:

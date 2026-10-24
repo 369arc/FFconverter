@@ -32,6 +32,13 @@ from collections import deque
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# PyInstaller's --windowed mode sets stdout/stderr to None on Windows/macOS.
+# argparse and a few diagnostics write to them, so provide a safe sink.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 __version__ = "1.1.0"
 
 # A desktop application must fail with a readable message, not a bare traceback,
@@ -3004,41 +3011,16 @@ class FFConverterApp(CTkDnD):
         native_tool_used = False  # Track if we successfully launched a native tool
 
         if os.name == "nt":
-            # Windows: Use PowerShell with Windows Forms
-            try:
-                ps_script = """
-                Add-Type -AssemblyName System.Windows.Forms
-                $ofd = New-Object System.Windows.Forms.OpenFileDialog
-                $ofd.Title = "{title}"
-                $ofd.InitialDirectory = "{initial_dir}"
-                $ofd.Multiselect = $true
-                $ofd.Filter = "{filter}"
-                if ($ofd.ShowDialog() -eq "OK") {{
-                    $ofd.FileNames -join "|"
-                }}
-                """.format(
-                    title=title.replace('"', '`"'),
-                    initial_dir=initial_dir.replace("\\", "\\\\").replace('"', '`"'),
-                    filter="All Files (*.*)|*.*"
-                    if not filetypes
-                    else "|".join(
-                        f"{desc} ({patterns})|{patterns}"
-                        for desc, patterns in filetypes
-                    ),
-                )
-                result = sp.run(
-                    ["powershell", "-Command", ps_script],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                native_tool_used = True
-                # If stdout has content, return the files; otherwise return None (cancelled)
-                if result.stdout.strip():
-                    return result.stdout.strip().split("|")
-                return None  # Dialog was cancelled
-            except Exception:
-                pass
+            # Tk uses the native Windows open dialog. The old PowerShell
+            # implementation built an invalid filter string ("*.mp4 *.mkv"
+            # instead of "*.mp4;*.mkv") and could show an empty file list.
+            selected = filedialog.askopenfilenames(
+                parent=self.winfo_toplevel(),
+                title=title,
+                filetypes=filetypes if filetypes else [("All Files", "*.*")],
+                initialdir=initial_dir,
+            )
+            return list(selected) if selected else None
 
         elif os.uname().sysname == "Darwin":
             # macOS: Use osascript with AppleScript
@@ -3228,33 +3210,13 @@ class FFConverterApp(CTkDnD):
         native_tool_used = False
 
         if os.name == "nt":
-            # Windows: Use PowerShell with Windows Forms FolderBrowserDialog
-            try:
-                ps_script = """
-                Add-Type -AssemblyName System.Windows.Forms
-                $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
-                $fbd.Description = "{title}"
-                $fbd.SelectedPath = "{initial_dir}"
-                $fbd.ShowNewFolderButton = $true
-                if ($fbd.ShowDialog() -eq "OK") {{
-                    $fbd.SelectedPath
-                }}
-                """.format(
-                    title=title.replace('"', '`"'),
-                    initial_dir=initial_dir.replace("\\", "\\\\").replace('"', '`"'),
-                )
-                result = sp.run(
-                    ["powershell", "-Command", ps_script],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                native_tool_used = True
-                if result.stdout.strip():
-                    return result.stdout.strip()
-                return None
-            except Exception:
-                pass
+            # Use Tk's native Windows folder picker.
+            selected = filedialog.askdirectory(
+                parent=self.winfo_toplevel(),
+                title=title,
+                initialdir=initial_dir,
+            )
+            return selected or None
 
         elif os.uname().sysname == "Darwin":
             # macOS: Use osascript with AppleScript

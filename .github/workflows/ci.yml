@@ -87,9 +87,26 @@ jobs:
           name: appimage-x86_64
           path: dist/FFConverter-*-x86_64.AppImage
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build Windows ZIP and EXE
+        shell: pwsh
+        run: ./packaging/build-windows.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64
+          path: |
+            dist/FFConverter-*-windows-x86_64.exe
+            dist/FFConverter-*-windows-x86_64.zip
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, deb, rpm, portable, appimage]
+    needs: [test, deb, rpm, portable, appimage, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

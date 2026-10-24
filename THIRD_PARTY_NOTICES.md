@@ -40,3 +40,15 @@ licenses) and the PyInstaller bootloader (GPL-2.0-or-later with the
 PyInstaller exception). The Flatpak builds Tcl/Tk 8.6 from source and runs on
 the Freedesktop Platform runtime. Their license texts are included in the
 respective upstream source archives and Flatpak runtime.
+
+## Windows FFmpeg binaries
+
+The Windows ZIP and single-file EXE bundle `ffmpeg.exe` and `ffprobe.exe` from
+BtbN's FFmpeg GPL builds:
+
+- Builds: https://github.com/BtbN/FFmpeg-Builds/releases/tag/latest
+- FFmpeg source: https://github.com/FFmpeg/FFmpeg
+- License: GPL-3.0-or-later (the build enables GPL components such as x264)
+
+The exact build/configuration is recorded in `FFMPEG-BUILD.txt`, and the
+FFmpeg license text is included in the ZIP.

@@ -1,6 +1,6 @@
 # FFConverter
 
-A simple video, audio, and image converter for Linux, built with
+A simple video, audio, and image converter for Linux and Windows, built with
 Python, Tk/CustomTkinter, and FFmpeg.
 
 ![FFConverter](screenshot-ui-dark_converted.png)
@@ -19,9 +19,10 @@ Python, Tk/CustomTkinter, and FFmpeg.
 
 | Component | Version / package |
 |-----------|-------------------|
-| Python | 3.8 or newer |
-| Tk bindings | `python3-tk` (Debian/Ubuntu), `python3-tkinter` (Fedora), `tk` (Arch) |
-| FFmpeg | 5.0 or newer (recommended) |
+| Platform | Linux (x86_64 / ARM64) and Windows 10/11 (x64) |
+| Python | Linux: 3.8 or newer; Windows builds bundle Python |
+| Tk bindings | Linux: `python3-tk`, `python3-tkinter` or `tk`; Windows: bundled |
+| FFmpeg | Linux: 5.0 or newer; Windows builds include FFmpeg/FFprobe |
 
 FFConverter checks for FFmpeg at startup. Without it the GUI still opens, but
 conversion is disabled and a clear warning is shown.
@@ -46,6 +47,34 @@ For ARM64 (Raspberry Pi 4/5, ARM servers) use
 To add a menu entry, run `./install-desktop.sh` from the extracted directory.
 The portable `run.sh` uses the bundled FFmpeg when the archive contains
 `usr/bin/ffmpeg`; otherwise it requires a system FFmpeg.
+
+### Windows 10/11 (64-bit)
+
+FFmpeg is bundled, so no separate installation is required. Two variants are
+available:
+
+**Portable ZIP (recommended)** — fast startup, contains `FFConverter.exe`,
+`ffmpeg.exe`, and `ffprobe.exe`:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/369arc/FFconverter/releases/latest/download/FFConverter-1.1.0-windows-x86_64.zip" -OutFile "FFConverter.zip"
+Expand-Archive -Path "FFConverter.zip" -DestinationPath "."
+.\FFConverter\FFConverter.exe
+```
+
+**Single-file EXE** — one file, FFmpeg included, but the first start is slower
+because it is unpacked to a temporary directory:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/369arc/FFconverter/releases/latest/download/FFConverter-1.1.0-windows-x86_64.exe" -OutFile "FFConverter.exe"
+.\FFConverter.exe
+```
+
+The Windows builds are **not code-signed**. If SmartScreen shows “Windows
+protected your PC”, click **More info → Run anyway** after verifying the
+SHA256 checksum. Do not disable Microsoft Defender or your antivirus. If a
+scanner reports a false positive, open an issue instead of disabling
+protection.
 
 ### Debian / Ubuntu
 
@@ -133,6 +162,14 @@ python3 -m unittest discover -s tests -v
 ./packaging/build-flatpak.sh   # dist/FFConverter-<version>-x86_64.flatpak
 ```
 
+Windows (from PowerShell):
+
+```powershell
+.\packaging\build-windows.ps1
+# dist/FFConverter-<version>-windows-x86_64.zip
+# dist/FFConverter-<version>-windows-x86_64.exe
+```
+
 To include FFmpeg in a portable archive, pass a directory containing
 self-contained `ffmpeg` and `ffprobe` binaries:
 
@@ -181,6 +218,13 @@ The bundled `tkinterdnd2` needs `libXcursor`. Debian/Ubuntu:
 library is unavailable, FFConverter now starts normally and simply disables
 drag and drop.
 
+### Windows SmartScreen or antivirus warning
+
+The Windows builds are not code-signed. Verify the SHA256 from `SHA256SUMS`,
+then use **More info → Run anyway** if you trust the download. Do not disable
+Microsoft Defender or your antivirus. Report false positives via GitHub Issues
+so they can be submitted to the scanner vendor.
+
 ### Permission denied
 
 ```bash
@@ -199,6 +243,9 @@ sudo dnf remove FFConverter
 # Portable
 rm -rf FFConverter
 ```
+
+Windows: delete the extracted `FFConverter` folder or the single `.exe` file.
+No registry entries or system files are created.
 
 ## Project layout
 
