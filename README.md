@@ -1,9 +1,10 @@
 # FFConverter
 
-A simple, portable video, audio, and image converter for Linux, built with
+A simple video, audio, and image converter for Linux, built with
 Python, Tk/CustomTkinter, and FFmpeg.
 
 ![FFConverter](screenshot-ui-dark_converted.png)
+![FFConverter](screenshot-ui-light_converted.png)
 
 ## Features
 
