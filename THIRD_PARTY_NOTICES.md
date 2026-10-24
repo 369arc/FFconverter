@@ -52,3 +52,11 @@ BtbN's FFmpeg GPL builds:
 
 The exact build/configuration is recorded in `FFMPEG-BUILD.txt`, and the
 FFmpeg license text is included in the ZIP.
+
+## macOS application bundle
+
+The macOS DMG bundles a PyInstaller app with Python, Tcl/Tk and Python GUI
+dependencies. FFmpeg and FFprobe are taken from Homebrew's FFmpeg formula and
+their non-system dylibs are bundled with `dylibbundler`. The corresponding
+FFmpeg build information is in `FFMPEG-BUILD.txt` inside the app bundle; the
+FFmpeg license text is copied into `Contents/Resources` during the build.

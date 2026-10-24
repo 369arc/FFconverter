@@ -123,6 +123,10 @@ def _get_ffmpeg_path():
         CURRENT_DIR / "usr" / "bin" / exe,
         CURRENT_DIR / "resources" / "ffmpeg" / exe,
         CURRENT_DIR / exe,
+        # macOS .app layouts: Contents/Frameworks is sys._MEIPASS, but keep
+        # MacOS/Resources as fallbacks for hand-built bundles.
+        CURRENT_DIR.parent / "MacOS" / exe,
+        CURRENT_DIR.parent / "Resources" / exe,
     ]
 
     # AppImage layout: $APPDIR/usr/bin/ffmpeg

@@ -17,11 +17,14 @@ release). They have been replaced by reproducible scripts:
 | `build-appimage.sh` | `dist/FFConverter-<version>-x86_64.AppImage` (Ubuntu 22.04 container) |
 | `build-flatpak.sh` | `dist/FFConverter-<version>-x86_64.flatpak` |
 | `build-windows.ps1` | `dist/FFConverter-<version>-windows-x86_64.zip` and `.exe` |
+| `build-macos.sh` | `dist/FFConverter-<version>-macos-<arch>.dmg` |
 
 All scripts use the wheels in `../pip-wheels/`, never run `pip` as root, and
 never need network access. The Windows script downloads BtbN FFmpeg GPL
-builds unless `-FfmpegDir` is supplied. `build-portable.sh --with-ffmpeg DIR` can embed
-self-contained `ffmpeg`/`ffprobe` binaries.
+builds unless `-FfmpegDir` is supplied. The macOS script bundles Homebrew
+FFmpeg and its dylibs with `dylibbundler`; it must run on macOS.
+`build-portable.sh --with-ffmpeg DIR` can embed self-contained
+`ffmpeg`/`ffprobe` binaries.
 
 Flatpak builds use the manifest in the repository root:
 

@@ -1,7 +1,7 @@
 # FFConverter
 
-A simple video, audio, and image converter for Linux and Windows, built with
-Python, Tk/CustomTkinter, and FFmpeg.
+A simple video, audio, and image converter for Linux, Windows, and macOS,
+built with Python, Tk/CustomTkinter, and FFmpeg.
 
 ![FFConverter](screenshot-ui-dark_converted.png)
 ![FFConverter](screenshot-ui-light_converted.png)
@@ -19,10 +19,10 @@ Python, Tk/CustomTkinter, and FFmpeg.
 
 | Component | Version / package |
 |-----------|-------------------|
-| Platform | Linux (x86_64 / ARM64) and Windows 10/11 (x64) |
-| Python | Linux: 3.8 or newer; Windows builds bundle Python |
-| Tk bindings | Linux: `python3-tk`, `python3-tkinter` or `tk`; Windows: bundled |
-| FFmpeg | Linux: 5.0 or newer; Windows builds include FFmpeg/FFprobe |
+| Platform | Linux (x86_64 / ARM64), Windows 10/11 (x64), macOS 11+ (Intel / Apple Silicon) |
+| Python | Linux: 3.8 or newer; Windows/macOS builds bundle Python |
+| Tk bindings | Linux: `python3-tk`, `python3-tkinter` or `tk`; Windows/macOS: bundled |
+| FFmpeg | Linux: 5.0 or newer; Windows/macOS builds include FFmpeg/FFprobe |
 
 FFConverter checks for FFmpeg at startup. Without it the GUI still opens, but
 conversion is disabled and a clear warning is shown.
@@ -75,6 +75,19 @@ protected your PC”, click **More info → Run anyway** after verifying the
 SHA256 checksum. Do not disable Microsoft Defender or your antivirus. If a
 scanner reports a false positive, open an issue instead of disabling
 protection.
+
+### macOS 11+ (Intel / Apple Silicon)
+
+FFmpeg is bundled. Download the DMG for your architecture, open it, and drag
+`FFConverter.app` to Applications:
+
+- Apple Silicon: `FFConverter-1.1.0-macos-arm64.dmg`
+- Intel: `FFConverter-1.1.0-macos-x86_64.dmg`
+
+The macOS build is ad-hoc signed but **not notarized**. On first launch,
+right-click / Control-click the app and choose **Open**, or use
+**System Settings → Privacy & Security → Open Anyway** after verifying the
+SHA256 checksum. Do not disable Gatekeeper globally.
 
 ### Debian / Ubuntu
 
@@ -170,6 +183,15 @@ Windows (from PowerShell):
 # dist/FFConverter-<version>-windows-x86_64.exe
 ```
 
+macOS (Homebrew Python with Tk, FFmpeg and dylibbundler):
+
+```bash
+brew install python@3.12 python-tk@3.12 ffmpeg dylibbundler
+PYTHON="$(brew --prefix python@3.12)/bin/python3.12" \
+  ./packaging/build-macos.sh
+# dist/FFConverter-<version>-macos-arm64.dmg (or x86_64)
+```
+
 To include FFmpeg in a portable archive, pass a directory containing
 self-contained `ffmpeg` and `ffprobe` binaries:
 
@@ -225,6 +247,13 @@ then use **More info → Run anyway** if you trust the download. Do not disable
 Microsoft Defender or your antivirus. Report false positives via GitHub Issues
 so they can be submitted to the scanner vendor.
 
+### macOS: “developer cannot be verified”
+
+This build is not notarized by Apple. Verify the DMG SHA256, then
+right-click the app → **Open** → **Open**, or use
+**System Settings → Privacy & Security → Open Anyway**. Do not disable
+Gatekeeper globally.
+
 ### Permission denied
 
 ```bash
@@ -245,7 +274,8 @@ rm -rf FFConverter
 ```
 
 Windows: delete the extracted `FFConverter` folder or the single `.exe` file.
-No registry entries or system files are created.
+macOS: move `FFConverter.app` from Applications to the Trash.
+No registry entries, system files or launch agents are created.
 
 ## Project layout
 
