@@ -19,8 +19,8 @@ Portable ZIP:
 
 Single-file EXE:
   1. Run FFConverter-<version>-windows-x86_64.exe.
-  2. The first start is slower because the executable is unpacked to a
-     temporary folder.
+  2. Startup is slower because the executable is unpacked to a temporary
+     folder on each run.
 
 Converted files are written to C:\Users\<your-name>\Converted by default. You
 can choose another output folder in the application.

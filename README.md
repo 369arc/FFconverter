@@ -62,8 +62,8 @@ Expand-Archive -Path "FFConverter.zip" -DestinationPath "."
 .\FFConverter\FFConverter.exe
 ```
 
-**Single-file EXE** — one file, FFmpeg included, but the first start is slower
-because it is unpacked to a temporary directory:
+**Single-file EXE** — one file, FFmpeg included, but startup is slower because
+it is unpacked to a temporary directory on each run:
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/369arc/FFconverter/releases/latest/download/FFConverter-1.1.0-windows-x86_64.exe" -OutFile "FFConverter.exe"
