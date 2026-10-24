@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Conversion
+
+- Use Lanczos resampling with `accurate_rnd` and `full_chroma_int` for every
+  video/image resize; the previous commands used FFmpeg's default bicubic
+  scaler.
+
 ## 1.1.0 — 2026-10-22
 
 ### Installation and packaging

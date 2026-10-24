@@ -365,6 +365,11 @@ VIDEO_RESOLUTIONS = {
 }
 
 
+# High-quality swscale settings used for every resize (video and images).
+# Lanczos keeps more detail than the default bicubic; accurate_rnd avoids
+# rounding artifacts; full_chroma_int interpolates chroma at full resolution.
+SCALE_FLAGS = "lanczos+accurate_rnd+full_chroma_int"
+
 # Presets
 AUDIO_SETTINGS = {
     "AAC": {
@@ -3436,9 +3441,9 @@ class FFConverterApp(CTkDnD):
             if target:
                 width, height = target
                 if self.video_keep_aspect_ratio.get():
-                    video_filters.append(f"scale=-2:{height}")
+                    video_filters.append(f"scale=-2:{height}:flags={SCALE_FLAGS}")
                 else:
-                    video_filters.append(f"scale={width}:{height}")
+                    video_filters.append(f"scale={width}:{height}:flags={SCALE_FLAGS}")
 
         frame_rate = self.video_frame_rate.get()
         copy_mode = quality_mode == "ORIGINAL (COPY)"
@@ -3589,17 +3594,17 @@ class FFConverterApp(CTkDnD):
         if size == "CUSTOM (WXH)" and self.custom_image_dims:
             width, height = self.custom_image_dims
             if self.image_keep_aspect_ratio.get():
-                image_filters.append(f"scale={width}:-2")
+                image_filters.append(f"scale={width}:-2:flags={SCALE_FLAGS}")
             else:
-                image_filters.append(f"scale={width}:{height}")
+                image_filters.append(f"scale={width}:{height}:flags={SCALE_FLAGS}")
         elif size != "ORIGINAL (COPY)":
             size_match = re.match(r"(\d+)X(\d+)", size)
             if size_match:
                 width, height = size_match.groups()
                 if self.image_keep_aspect_ratio.get():
-                    image_filters.append(f"scale={width}:-2")
+                    image_filters.append(f"scale={width}:-2:flags={SCALE_FLAGS}")
                 else:
-                    image_filters.append(f"scale={width}:{height}")
+                    image_filters.append(f"scale={width}:{height}:flags={SCALE_FLAGS}")
 
         visual_filter = self.image_visual_filter.get()
         if visual_filter == "GRAYSCALE (BLACK & WHITE)":
@@ -3612,7 +3617,7 @@ class FFConverterApp(CTkDnD):
         if output_format == "ico":
             # The ICO encoder accepts at most 256x256.
             image_filters.append(
-                "scale=256:256:force_original_aspect_ratio=decrease"
+                f"scale=256:256:force_original_aspect_ratio=decrease:flags={SCALE_FLAGS}"
             )
 
         if image_filters:

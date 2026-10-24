@@ -60,7 +60,7 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 | P1-6 | P1 | Video “Keep aspect ratio” is a no-op; presets labelled 1080P/4K/8K never resize. | Fixed |
 | P1-7 | P1 | Uppercase format names vs lowercase comparisons: image compress does nothing; WAV/FLAC with limiter/dither falls through to AAC in a WAV file. | Fixed |
 | P1-8 | P1 | ALAC writes `.alac` (no such muxer); AMR ignores 8 kHz mono; OGG offers 320K/256K, which libvorbis rejects. | Fixed |
-| P1-9 | P1 | `scale=W:-1` can produce odd heights, which JPEG/4:2:0 rejects. | Fixed (`-2`) |
+| P1-9 | P1 | `scale=W:-1` can produce odd heights, which JPEG/4:2:0 rejects. | Fixed (`-2`, Lanczos flags) |
 | P1-10 | P1 | Image tab offers PDF/PSD/AI/EPS/HEIC as outputs although FFmpeg cannot encode them; ICO fails above 256×256. | Fixed |
 | P1-11 | P1 | Missing `libXcursor` makes `tkinterdnd2` raise during root-window construction, killing the whole app instead of disabling DnD. | Fixed |
 | P1-12 | P1 | `ffprobe` path is derived with `FFMPEG_PATH.replace("ffmpeg","ffprobe")`, which fails for wrappers/snap paths. | Fixed |
@@ -123,6 +123,8 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 
 - Sequential batch worker; thread-safe UI queue; real `-progress pipe:1`
   parsing; working cancel and partial-file cleanup.
+- High-quality Lanczos scaling (`accurate_rnd`, `full_chroma_int`) for every
+  video/image resize.
 - Unique output names; no silent overwrite.
 - Format/argument correctness fixes listed above.
 - `--version`, `--help`, and desktop file arguments.

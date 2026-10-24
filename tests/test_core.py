@@ -100,7 +100,7 @@ class VideoArgsTests(BaseAppTest):
         app.video_quality_value = Var("1080P (5M)")
         cmd = []
         app._build_video_args(cmd)
-        self.assertIn("scale=-2:1080", cmd)
+        self.assertIn(f"scale=-2:1080:flags={ffc.SCALE_FLAGS}", cmd)
         self.assertIn("5M", cmd)
         self.assertIn("aac", cmd)
 
@@ -188,14 +188,27 @@ class ImageArgsTests(BaseAppTest):
         app.image_size = Var("1280X720 (HD)")
         cmd = []
         app._build_image_args(cmd)
-        self.assertIn("scale=1280:-2", cmd)
+        self.assertIn(f"scale=1280:-2:flags={ffc.SCALE_FLAGS}", cmd)
 
     def test_ico_is_limited_to_256(self):
         app = self.make_app()
         app.image_format = Var("ICO")
         cmd = []
         app._build_image_args(cmd)
-        self.assertIn("scale=256:256:force_original_aspect_ratio=decrease", cmd)
+        self.assertIn(
+            f"scale=256:256:force_original_aspect_ratio=decrease:flags={ffc.SCALE_FLAGS}",
+            cmd,
+        )
+
+    def test_all_scaling_uses_lanczos_flags(self):
+        app = self.make_app()
+        app.image_size = Var("1920X1080 (FULL HD)")
+        cmd = []
+        app._build_image_args(cmd)
+        scale_filters = [part for part in cmd if part.startswith("scale=")]
+        self.assertTrue(scale_filters)
+        for scale in scale_filters:
+            self.assertIn(f"flags={ffc.SCALE_FLAGS}", scale)
 
     def test_animated_png_gets_single_frame(self):
         app = self.make_app()
