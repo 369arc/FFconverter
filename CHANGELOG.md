@@ -19,8 +19,8 @@
 - Updated the Flatpak manifest to runtime 25.08, bundled Tcl/Tk for tkinter,
   and removed unnecessary network access.
 - Added a self-contained AppImage (PyInstaller, Python/Tk bundled), a Flatpak
-  bundle, and Windows portable ZIP / single-file EXE builds with bundled
-  FFmpeg.
+  bundle, Windows portable ZIP / single-file EXE builds, and macOS arm64/
+  Intel DMGs with bundled FFmpeg.
 - Removed committed build artifacts and unused Pillow wheels from the working
   tree (history still contains them; see `AUDIT.md`).
 
@@ -54,7 +54,8 @@
 - Verified the built DEB on Ubuntu 24.04 (Python 3.12), the RPM on Fedora 44
   (Python 3.14), the portable archive on Fedora 44, the AppImage on Ubuntu
   22.04/Fedora 44, the Flatpak with a real conversion, and the Windows
-  EXE/ZIP with a frozen-GUI smoke test on windows-latest.
+  EXE/ZIP with a frozen-GUI smoke test on windows-latest, and the macOS DMGs
+  on macos-15 / macos-15-intel.
 
 ## 1.0 — 2026-05-03
 

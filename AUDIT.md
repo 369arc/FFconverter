@@ -2,8 +2,8 @@
 
 Date: 2026-10-22
 Scope: repository `369arc/FFconverter`, release `v1.0` assets, current
-`master`, Linux installation paths, the Windows portable build, and the
-conversion pipeline.
+`master`, Linux/Windows/macOS installation paths, and the conversion
+pipeline.
 
 ## Summary
 
@@ -110,10 +110,14 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 - `packaging/build-windows.ps1` builds a portable ZIP and a single-file EXE
   with PyInstaller, bundling FFmpeg/FFprobe and using native Tk dialogs on
   Windows.
+- `packaging/build-macos.sh` builds arm64/Intel `.app` + `.dmg` bundles with
+  static FFmpeg 9.0.2 from ffmpeg.martin-riedl.de; the DMG includes an
+  Applications symlink and Gatekeeper instructions.
 - `run.sh` checks Python/Tk, uses `vendor/`, offers an offline wheel-based
   venv fallback, and no longer aborts before `--version` when FFmpeg is
   missing.
-- CI workflows build/test DEB, RPM, portable, AppImage, and Windows artifacts.
+- CI workflows build/test DEB, RPM, portable, AppImage, Windows, and macOS
+  artifacts.
 
 ### Application
 
@@ -142,6 +146,8 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 - Windows EXE and ZIP built on windows-latest; the frozen-GUI smoke test
   created a Tk window and verified CustomTkinter, tkdnd, resources and the
   bundled FFmpeg.
+- macOS arm64 and Intel DMGs built on macos-15 / macos-15-intel; the app,
+  static FFmpeg and GUI smoke tests passed.
 - Format matrix against Fedora FFmpeg 8: all video outputs except the
   deliberately removed DV/GXF now succeed; all audio outputs succeed; all
   image outputs succeed (ICO now scales to 256).
@@ -158,9 +164,9 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
    `packaging/build-deb.sh`.
 3. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
    Wayland, KDE, and a HiDPI display before release.
-4. **macOS** is not part of this release. A .dmg requires PyInstaller on
-   macOS, Gatekeeper testing, and preferably an Apple Developer account for
-   signing/notarization.
+4. **macOS signing/notarization.** The DMGs are ad-hoc signed but not
+   notarized; users must use the documented Gatekeeper override. Apple
+   Developer signing would remove that friction.
 5. **Windows signing** is optional but recommended to reduce SmartScreen
    warnings; the current builds are unsigned and verified by SHA256.
 6. **Translations/settings persistence** are not part of this audit.
