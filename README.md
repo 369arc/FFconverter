@@ -85,10 +85,11 @@ FFmpeg is bundled. Download the DMG for your architecture, open it, and drag
 - Apple Silicon: `FFConverter-1.1.0-macos-arm64.dmg`
 - Intel: `FFConverter-1.1.0-macos-x86_64.dmg`
 
-The macOS build is ad-hoc signed but **not notarized**. On first launch,
-right-click / Control-click the app and choose **Open**, or use
-**System Settings → Privacy & Security → Open Anyway** after verifying the
-SHA256 checksum. Do not disable Gatekeeper globally.
+The macOS build is ad-hoc signed but **not notarized**. On first launch macOS
+may say: “Apple could not verify ‘FFConverter’ is free of malware…”. This is
+Gatekeeper, not a virus report. After verifying the SHA256 checksum, use
+**System Settings → Privacy & Security → Open Anyway** (or right-click the app
+→ **Open** on older macOS versions). Do not disable Gatekeeper globally.
 
 ### Debian / Ubuntu
 
@@ -248,12 +249,21 @@ then use **More info → Run anyway** if you trust the download. Do not disable
 Microsoft Defender or your antivirus. Report false positives via GitHub Issues
 so they can be submitted to the scanner vendor.
 
-### macOS: “developer cannot be verified”
+### macOS: “Apple could not verify FFConverter”
 
-This build is not notarized by Apple. Verify the DMG SHA256, then
-right-click the app → **Open** → **Open**, or use
-**System Settings → Privacy & Security → Open Anyway**. Do not disable
-Gatekeeper globally.
+This build is not notarized by Apple, so Gatekeeper shows this warning. It is
+not a virus report. Verify the DMG SHA256, then open
+**System Settings → Privacy & Security**, find the FFConverter entry and click
+**Open Anyway**. On older macOS versions you can also right-click the app →
+**Open** → **Open**.
+
+If macOS says the app is damaged:
+
+```bash
+xattr -cr /Applications/FFConverter.app
+```
+
+Do not disable Gatekeeper globally.
 
 ### Permission denied
 

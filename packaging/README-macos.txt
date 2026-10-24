@@ -10,17 +10,26 @@ Install
 2. Drag FFConverter.app into the Applications folder.
 3. Launch it from Applications.
 
-This build is not notarized by Apple. On first launch macOS may show
-"FFConverter cannot be opened because the developer cannot be verified".
+This build is not notarized by Apple. On first launch macOS may show:
 
-If you trust the download and its SHA256 checksum, do one of the following:
+  "Apple could not verify 'FFConverter' is free of malware that may harm
+   your Mac or compromise your privacy."
 
+This is Gatekeeper's standard warning for an app that is not notarized; it is
+not a virus report. If you trust the download and its SHA256 checksum, do one
+of the following:
+
+- Open System Settings -> Privacy & Security, find the FFConverter message
+  and click "Open Anyway", then confirm; or
 - Right-click / Control-click FFConverter.app, choose "Open", then "Open"
-  again; or
-- Open System Settings -> Privacy & Security and click "Open Anyway"; or
+  again (this may not be available on newer macOS versions); or
 - Remove the quarantine flag:
 
     xattr -dr com.apple.quarantine /Applications/FFConverter.app
+
+If macOS says the app is "damaged", run:
+
+    xattr -cr /Applications/FFConverter.app
 
 Do not disable Gatekeeper globally.
 
