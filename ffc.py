@@ -4505,7 +4505,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="*",
         help="files to open (also used by the desktop launcher)",
     )
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
+
+    if args.smoke_test:
+        # Used by CI: exercise Tk, CustomTkinter, tkdnd, bundled resources and
+        # the FFmpeg binary without entering the event loop.
+        app = FFConverterApp()
+        app.update_idletasks()
+        ok = (
+            ffmpeg_available()
+            and (CURRENT_DIR / "resources" / "icon.ico").is_file()
+            and bool(getattr(app, "dnd_ready", False))
+        )
+        app.destroy()
+        return 0 if ok else 1
 
     app = FFConverterApp()
     app.protocol("WM_DELETE_WINDOW", app._on_closing)

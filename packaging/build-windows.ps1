@@ -166,7 +166,7 @@ Compress-Archive -Path $AppDir -DestinationPath $ZipTarget -CompressionLevel Opt
 
 Write-Host "==> Smoke-testing executables"
 foreach ($exe in @($OneTarget, (Join-Path $AppDir "FFConverter.exe"))) {
-    $process = Start-Process -FilePath $exe -ArgumentList "--version" `
+    $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test" `
         -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
         throw "smoke test failed for $exe (exit code $($process.ExitCode))"
