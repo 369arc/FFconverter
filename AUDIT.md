@@ -2,7 +2,8 @@
 
 Date: 2026-10-22
 Scope: repository `369arc/FFconverter`, release `v1.0` assets, current
-`master`, installation paths, and the conversion pipeline.
+`master`, Linux installation paths, the Windows portable build, and the
+conversion pipeline.
 
 ## Summary
 
@@ -106,10 +107,13 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
   bundling Python/Tk and using the system FFmpeg.
 - `packaging/build-flatpak.sh` builds a Flatpak bundle with Tcl/Tk modules; the
   manifest uses runtime 25.08 and only X11 (Tk has no native Wayland backend).
+- `packaging/build-windows.ps1` builds a portable ZIP and a single-file EXE
+  with PyInstaller, bundling FFmpeg/FFprobe and using native Tk dialogs on
+  Windows.
 - `run.sh` checks Python/Tk, uses `vendor/`, offers an offline wheel-based
   venv fallback, and no longer aborts before `--version` when FFmpeg is
   missing.
-- CI workflows build/test DEB, RPM, portable, and AppImage artifacts.
+- CI workflows build/test DEB, RPM, portable, AppImage, and Windows artifacts.
 
 ### Application
 
@@ -135,6 +139,9 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
   during an 8K conversion stopped FFmpeg and removed the partial file.
 - AppImage (Ubuntu 22.04/Fedora 44) and Flatpak (runtime 25.08) launched; the
   Flatpak performed a real MP4 → MKV conversion.
+- Windows EXE and ZIP built on windows-latest; the frozen-GUI smoke test
+  created a Tk window and verified CustomTkinter, tkdnd, resources and the
+  bundled FFmpeg.
 - Format matrix against Fedora FFmpeg 8: all video outputs except the
   deliberately removed DV/GXF now succeed; all audio outputs succeed; all
   image outputs succeed (ICO now scales to 256).
@@ -151,7 +158,12 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
    `packaging/build-deb.sh`.
 3. **UI testing.** The fixes were verified with Tk/Xvfb; test on GNOME
    Wayland, KDE, and a HiDPI display before release.
-4. **Translations/settings persistence** are not part of this audit.
+4. **macOS** is not part of this release. A .dmg requires PyInstaller on
+   macOS, Gatekeeper testing, and preferably an Apple Developer account for
+   signing/notarization.
+5. **Windows signing** is optional but recommended to reduce SmartScreen
+   warnings; the current builds are unsigned and verified by SHA256.
+6. **Translations/settings persistence** are not part of this audit.
 
 ## Notes on the audit environment
 
