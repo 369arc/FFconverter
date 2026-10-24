@@ -183,10 +183,10 @@ Windows (from PowerShell):
 # dist/FFConverter-<version>-windows-x86_64.exe
 ```
 
-macOS (Homebrew Python with Tk, FFmpeg and dylibbundler):
+macOS (Homebrew Python with Tk; static FFmpeg is downloaded automatically):
 
 ```bash
-brew install python@3.12 python-tk@3.12 ffmpeg dylibbundler
+brew install python@3.12 python-tk@3.12
 PYTHON="$(brew --prefix python@3.12)/bin/python3.12" \
   ./packaging/build-macos.sh
 # dist/FFConverter-<version>-macos-arm64.dmg (or x86_64)

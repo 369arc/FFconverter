@@ -21,8 +21,8 @@ release). They have been replaced by reproducible scripts:
 
 All scripts use the wheels in `../pip-wheels/`, never run `pip` as root, and
 never need network access. The Windows script downloads BtbN FFmpeg GPL
-builds unless `-FfmpegDir` is supplied. The macOS script bundles Homebrew
-FFmpeg and its dylibs with `dylibbundler`; it must run on macOS.
+builds unless `-FfmpegDir` is supplied. The macOS script bundles static
+FFmpeg/FFprobe builds from ffmpeg.martin-riedl.de; it must run on macOS.
 `build-portable.sh --with-ffmpeg DIR` can embed self-contained
 `ffmpeg`/`ffprobe` binaries.
 

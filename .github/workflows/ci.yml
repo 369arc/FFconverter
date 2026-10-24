@@ -116,13 +116,30 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install build dependencies
-        run: brew install python@3.12 python-tk@3.12 ffmpeg dylibbundler
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Select Python with tkinter
+        run: |
+          for candidate in python3.12 python3 /usr/local/bin/python3.12 /usr/bin/python3; do
+            if command -v "$candidate" >/dev/null 2>&1 && \
+               "$candidate" -c 'import tkinter' >/dev/null 2>&1; then
+              echo "PYTHON=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              "$candidate" -c 'import tkinter; print("Tk", tkinter.TkVersion)'
+              exit 0
+            fi
+          done
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            brew install python@3.12 python-tk@3.12
+            echo "PYTHON=$(brew --prefix python@3.12)/bin/python3.12" >> "$GITHUB_ENV"
+          else
+            echo "No Python 3.12 with tkinter found" >&2
+            exit 1
+          fi
       - name: Build DMG
         run: |
           chmod +x packaging/build-macos.sh
-          PYTHON="$(brew --prefix python@3.12)/bin/python3.12" \
-            ./packaging/build-macos.sh
+          ./packaging/build-macos.sh
       - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}

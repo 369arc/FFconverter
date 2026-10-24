@@ -56,7 +56,7 @@ FFmpeg license text is included in the ZIP.
 ## macOS application bundle
 
 The macOS DMG bundles a PyInstaller app with Python, Tcl/Tk and Python GUI
-dependencies. FFmpeg and FFprobe are taken from Homebrew's FFmpeg formula and
-their non-system dylibs are bundled with `dylibbundler`. The corresponding
-FFmpeg build information is in `FFMPEG-BUILD.txt` inside the app bundle; the
-FFmpeg license text is copied into `Contents/Resources` during the build.
+dependencies. FFmpeg and FFprobe are static 9.0.2 builds from
+https://ffmpeg.martin-riedl.de/ (macOS arm64/amd64). The corresponding build
+information is in `FFMPEG-BUILD.txt` inside the app bundle; the license text
+is included in `Contents/Resources`.

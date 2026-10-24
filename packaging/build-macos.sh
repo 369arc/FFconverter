@@ -3,11 +3,14 @@
 #
 # Produces dist/FFConverter-<version>-macos-<arch>.dmg
 #
-# Requirements (Homebrew):
-#   brew install python@3.12 python-tk@3.12 ffmpeg dylibbundler
+# Requirements:
+#   - macOS with python3.12 including tkinter (python.org build or Homebrew
+#     python@3.12 + python-tk@3.12)
+#   - curl and unzip
 #
-# Use PYTHON=/path/to/python3.12 if python3 is not the Homebrew Python.
-# The app is ad-hoc signed, not notarized; see packaging/README-macos.txt.
+# FFmpeg/FFprobe are static macOS builds from ffmpeg.martin-riedl.de (pinned
+# below, with SHA256). The app is ad-hoc signed, not notarized; see
+# packaging/README-macos.txt.
 
 set -euo pipefail
 
@@ -36,10 +39,9 @@ case "$ARCH" in
     *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-for command in ffmpeg ffprobe dylibbundler hdiutil codesign; do
+for command in curl unzip hdiutil codesign; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "missing command: $command" >&2
-        echo "install with: brew install python@3.12 python-tk@3.12 ffmpeg dylibbundler" >&2
         exit 1
     }
 done
@@ -91,37 +93,38 @@ FRAMEWORKS="$APP/Contents/Frameworks"
 RESOURCES="$APP/Contents/Resources"
 mkdir -p "$FRAMEWORKS" "$RESOURCES"
 
-echo "==> Bundling FFmpeg and its dylibs"
-cp "$(command -v ffmpeg)" "$FRAMEWORKS/ffmpeg"
-cp "$(command -v ffprobe)" "$FRAMEWORKS/ffprobe"
+echo "==> Downloading static FFmpeg/FFprobe (9.0.2)"
+if [ "$ARCH" = "arm64" ]; then
+    FFMPEG_BASE="https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2"
+    FFMPEG_SHA="c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924"
+    FFPROBE_SHA="fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
+else
+    FFMPEG_BASE="https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2"
+    FFMPEG_SHA="7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4"
+    FFPROBE_SHA="2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd"
+fi
+FFMPEG_CACHE="$BUILD/ffmpeg-download"
+mkdir -p "$FFMPEG_CACHE"
+curl -fL --retry 3 -o "$FFMPEG_CACHE/ffmpeg.zip" "$FFMPEG_BASE/ffmpeg.zip"
+curl -fL --retry 3 -o "$FFMPEG_CACHE/ffprobe.zip" "$FFMPEG_BASE/ffprobe.zip"
+echo "$FFMPEG_SHA  $FFMPEG_CACHE/ffmpeg.zip" | shasum -a 256 -c -
+echo "$FFPROBE_SHA  $FFMPEG_CACHE/ffprobe.zip" | shasum -a 256 -c -
+unzip -o "$FFMPEG_CACHE/ffmpeg.zip" -d "$FFMPEG_CACHE/ffmpeg" >/dev/null
+unzip -o "$FFMPEG_CACHE/ffprobe.zip" -d "$FFMPEG_CACHE/ffprobe" >/dev/null
+cp "$FFMPEG_CACHE/ffmpeg/ffmpeg" "$FRAMEWORKS/ffmpeg"
+cp "$FFMPEG_CACHE/ffprobe/ffprobe" "$FRAMEWORKS/ffprobe"
 chmod 755 "$FRAMEWORKS/ffmpeg" "$FRAMEWORKS/ffprobe"
-# Homebrew binaries carry signatures that become invalid when dylib paths are
-# rewritten; strip them before bundling and sign the whole app afterwards.
-codesign --remove-signature "$FRAMEWORKS/ffmpeg" >/dev/null 2>&1 || true
-codesign --remove-signature "$FRAMEWORKS/ffprobe" >/dev/null 2>&1 || true
-
-dylibbundler -od -b \
-    -x "$FRAMEWORKS/ffmpeg" \
-    -x "$FRAMEWORKS/ffprobe" \
-    -d "$FRAMEWORKS" \
-    -p "@executable_path" >/dev/null
 
 cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
+cp "$ROOT/LICENSE" "$RESOURCES/FFmpeg-LICENSE.txt"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$RESOURCES/THIRD_PARTY_NOTICES.md"
 cp "$ROOT/packaging/README-macos.txt" "$RESOURCES/README-macos.txt"
 
-FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
-if [ -n "$FFMPEG_PREFIX" ]; then
-    LICENSE_FILE=$(find "$FFMPEG_PREFIX" -maxdepth 4 -type f \
-        \( -iname 'COPYING*' -o -iname 'LICENSE*' \) | head -n1)
-    if [ -n "$LICENSE_FILE" ]; then
-        cp "$LICENSE_FILE" "$RESOURCES/FFmpeg-LICENSE.txt"
-    fi
-fi
 "$FRAMEWORKS/ffmpeg" -version > "$RESOURCES/FFMPEG-BUILD.txt"
 {
-    echo "Source: https://github.com/FFmpeg/FFmpeg"
-    echo "Packaged by packaging/build-macos.sh from Homebrew ffmpeg."
+    echo "Source: $FFMPEG_BASE"
+    echo "Builds: https://ffmpeg.martin-riedl.de/"
+    echo "FFmpeg source: https://github.com/FFmpeg/FFmpeg"
 } >> "$RESOURCES/FFMPEG-BUILD.txt"
 
 echo "==> Signing (ad-hoc)"
