@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Packaging
+
+- Desktop entries no longer advertise media MIME types. FFConverter was
+  becoming the default handler for audio, video and images on systems without
+  an explicit default; it now only runs when launched explicitly or opened
+  with a file argument.
+
 ### Conversion
 
 - Use Lanczos resampling with `accurate_rnd` and `full_chroma_int` for every

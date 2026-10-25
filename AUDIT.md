@@ -78,7 +78,7 @@ a major feature, **P2** quality/robustness, **P3** cosmetic/docs.
 | P2-5 | P2 | Empty/unsupported output dirs and read-only destinations produce tracebacks or unclear FFmpeg errors. | Improved (explicit errors) |
 | P2-6 | P2 | Missing `resources/images/folder_icon.png` referenced by the Browse button. | Fixed (fallback) |
 | P2-7 | P2 | `CustomSizeDialog` silently closes on invalid input. | Fixed |
-| P2-8 | P2 | `MimeType=video/*;audio/*;image/*` is invalid in desktop files; category hint duplicated entries. | Fixed |
+| P2-8 | P2 | `MimeType=video/*;audio/*;image/*` is invalid in desktop files, and registering concrete media types made FFConverter a default handler. | Fixed (MIME types removed) |
 | P2-9 | P2 | README tells Arch users `sudo cp -r usr /` and later `rm -rf /opt/FFConverter`, which do not match. | Fixed |
 | P2-10 | P2 | README claims “Python 3.8+”, “FFmpeg optional/bundled” for DEB/RPM, and “~388 MB” inconsistently. | Fixed |
 | P2-11 | P2 | No tests at all. | Fixed (22 unit tests) |

@@ -64,7 +64,6 @@ TryExec=FFConverter
 Terminal=false
 Categories=AudioVideo;AudioVideoEditing;
 Keywords=convert;video;audio;image;ffmpeg;media;
-MimeType=video/mp4;video/x-matroska;video/quicktime;video/x-msvideo;video/webm;video/mpeg;video/ogg;video/x-ms-wmv;video/mp2t;audio/mpeg;audio/mp4;audio/x-m4a;audio/flac;audio/x-wav;audio/ogg;audio/opus;image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;
 Icon=ffconverter
 StartupNotify=true
 StartupWMClass=FFConverter

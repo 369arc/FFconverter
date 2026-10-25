@@ -11,6 +11,7 @@ built with Python, Tk/CustomTkinter, and FFmpeg.
 - Video, audio, and image tabs with format-specific options
 - Batch conversion with per-file progress and working cancellation
 - High-quality Lanczos scaling for video and image resizing
+- Does not register itself as the default handler for media files
 - Drag and drop, native file dialogs, and “Open with” support
 - Optional system tray icon
 - No Python packages are installed with `pip` and no network access is
